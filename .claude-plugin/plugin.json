@@ -1,0 +1,16 @@
+{
+  "name": "ops-tickets",
+  "version": "0.1.0",
+  "description": "Turn your production health checks and alerts (database, Slack, Sentry, AWS, GitHub, URLs) into a ticket pane with owners, fixes, verification and regressions.",
+  "author": { "name": "MndTheNerd" },
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "python": {
+      "type": "string",
+      "title": "Python command",
+      "description": "Python 3 used to run the bundled engine (python, python3 or a full path)",
+      "default": "python"
+    }
+  }
+}

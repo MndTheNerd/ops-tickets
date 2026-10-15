@@ -1,0 +1,13 @@
+{
+  "name": "ops-tickets",
+  "owner": {
+    "name": "MndTheNerd"
+  },
+  "plugins": [
+    {
+      "name": "ops-tickets",
+      "source": "./"
+    }
+  ],
+  "description": "ops-tickets: production health checks and alerts as a ticket pane in Claude Code"
+}
