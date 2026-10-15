@@ -36,16 +36,16 @@ for (const surface of ['desktop', 'terminal'] as const) {
 
     // headings are Markdown on desktop, Text in the terminal: find by text or by key
     const has = async (text: RegExp, key: string) => (await ui.find({ text })) ?? (await ui.find({ key }))
-    expect(await has(/Exampleland/, 'ch-Exampleland')).toBeDefined()
-    expect(await has(/Otherland/, 'ch-Otherland')).toBeDefined()
-    expect(await ui.find({ text: /Harbour/ })).toBeDefined()
+    expect(await ui.find({ text: /EXAMPLELAND/ })).toBeDefined()
+    expect(await ui.find({ text: /OTHERLAND/ })).toBeDefined()
+    expect(await ui.find({ text: /HARBOUR/ })).toBeDefined()
     if (surface === 'desktop') expect((await ui.findAll({ type: 'Svg' })).length).toBeGreaterThanOrEqual(7)
     else expect(await ui.find({ text: /1 high/ })).toBeDefined()
 
     // filters: owner chip narrows the list
     await ui.press({ key: 'f-own-Ops' })
-    expect(await ui.find({ text: /Harbour/ })).toBeUndefined()
-    expect(await ui.find({ text: /Northgate/ })).toBeDefined()
+    expect(await ui.find({ text: /HARBOUR/ })).toBeUndefined()
+    expect(await ui.find({ text: /NORTHGATE/ })).toBeDefined()
     await ui.press({ key: 'f-own-all' })
 
     await ui.press({ key: 'export' })
@@ -65,7 +65,13 @@ for (const surface of ['desktop', 'terminal'] as const) {
       for (const c of node.children ?? []) walk(c)
     }
     walk(await ui.drawn())
-    expect(order.indexOf('detail-4')).toBe(order.indexOf('t-4') + 1)
+    if (surface === 'desktop') {
+      // wide desktop pane: the inspector sits beside the list, after every row
+      expect(order.indexOf('detail-4')).toBe(order.length - 1)
+    } else {
+      // terminal / narrow: it opens right under its own row
+      expect(order.indexOf('detail-4')).toBe(order.indexOf('t-4') + 1)
+    }
     expect(await ui.find({ text: /Decide which is right/ })).toBeDefined()
 
     await ui.press({ key: 'copy-ticket-4' })

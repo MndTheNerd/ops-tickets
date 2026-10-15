@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderSurface } from 'claude-code'
 
 import type { Ticket } from '../types'
-import { SEV, barSvg, cardSvg, dotSvg, progressSvg, timelineSvg, trendSvg } from './visuals'
+import { C, SEV, dotSvg, kpiSvg, progressSvg, shareBarSvg, trendSvg } from './visuals'
 
 const PANE = 'ops-tickets'
 const tickets = atom({ plugin: 'ops-tickets', key: 'tickets' } as const, [])
@@ -413,169 +413,274 @@ export const register: Register = (on, options) => {
     }
 
     const Markdown = 'Markdown' in els ? els.Markdown : null
+    const Code = 'Code' in els ? els.Code : null
     const isDesktop = e.surface === 'desktop'
+    // The design is dark-only on desktop; the terminal keeps the theme's own colours.
+    const k = isDesktop
+      ? { bg: C.canvas, panel: C.panel, panel2: C.panel2, raised: C.raised, hair: C.hair, border: C.border, text: C.text, strong: C.strong,
+          muted: C.muted, ghost: C.ghost, cyan: C.cyan, cyanSoft: C.cyanSoft, emerald: C.emerald, amber: C.amberSoft, rose: C.roseSoft }
+      : null
+    const col = (hex: string | undefined, theme: string) => (k ? hex : theme || undefined) as never
     const mdText = (s: string) => s.replace(/[\\`*_[\]#<>|]/g, m => `\\${m}`)
-    const heading = (key: string, level: 1 | 2 | 3, text: string, color?: 'claude' | 'text') =>
-      Markdown && isDesktop
-        ? <Markdown key={key} text={`${'#'.repeat(level)} ${mdText(text)}`} />
-        : <Text key={key} bold color={color}>{text}</Text>
-    const pill = (key: string, text: string, color: string) => (
-      <Text key={key} bold backgroundColor={color as never} color="inverseText">{` ${text} `}</Text>
-    )
+    const heading = (key: string, level: 1 | 2 | 3, text: string) =>
+      Markdown && isDesktop ? <Markdown key={key} text={`${'#'.repeat(level)} ${mdText(text)}`} /> : <Text key={key} bold>{text}</Text>
+    // tinted chip: 10% fill look (dark tint) with the signal colour as text
+    const tone = (label: string) =>
+      /conflict|refused|failed|crash|blocked|no status|down|unreachable|regression/i.test(label) ? 'rose'
+        : /cancel|mismatch|setup|slow|spik|missing|inventory|catalogue/i.test(label) ? 'amber'
+          : /fixed|verified|ok\b/i.test(label) ? 'emerald' : 'cyan'
+    const TINT: Record<string, [string, string]> = {
+      rose: ['#3b1520', C.roseSoft], amber: ['#3a2a10', C.amberSoft], emerald: ['#0f2e24', C.emerald], cyan: ['#0e2a3b', C.cyanSoft],
+      ghost: ['#1e293b', C.muted], solidRose: ['#93000a', '#ffdad6'], solidCyan: [C.cyan, '#001e2c'],
+    }
+    const chip = (key: string, text: string, t: string) => {
+      const [bg, fg] = TINT[t] ?? TINT.ghost!
+      return <Text key={key} backgroundColor={col(bg, 'promptBorder')} color={col(fg, 'text')}>{` ${text} `}</Text>
+    }
+    const ago = (iso: string) => {
+      const m = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000))
+      return m < 60 ? `${m}m ago` : m < 1440 ? `${Math.floor(m / 60)}h ${m % 60}m ago` : `${Math.floor(m / 1440)}d ago`
+    }
     const doneCount = (t: Ticket) => t.steps.filter((_, i) => t.steps_done.includes(i)).length
     const tally = (key: (t: Ticket) => string) =>
       [...live.filter(t => t.status === 'open').reduce((m, t) => m.set(key(t), (m.get(key(t)) ?? 0) + 1), new Map<string, number>())]
         .sort((a, b) => b[1] - a[1])
     const allOpen = all.filter(t => t.status === 'open')
-    const allHigh = allOpen.filter(t => t.severity === 'high').length
+    const allHigh = allOpen.filter(t => t.severity === 'high')
+    const dayAgo = new Date(Date.now() - 86400000).toISOString()
+    const newToday = all.filter(t => t.first_seen >= dayAgo.slice(0, 19)).length
+    const fixed = all.filter(t => t.status === 'fixed')
+    const resolveMins = fixed.map(t => (Date.parse(t.fixed_at ?? '') - Date.parse(t.first_seen)) / 60000).filter(x => x > 0)
+    const avgResolve = resolveMins.length ? resolveMins.reduce((a, b) => a + b, 0) / resolveMins.length : null
+    const fmtDur = (m: number | null) => (m === null ? '-' : m < 60 ? `${Math.round(m)}m` : m < 1440 ? `${Math.floor(m / 60)}h ${Math.round(m % 60)}m` : `${(m / 1440).toFixed(1)}d`)
+    const verifiedToday = fixed.filter(t => t.events.some(ev => ev.kind === 'verified' && ev.at >= dayAgo.slice(0, 19))).length
+    const places = new Set(allHigh.map(t => t.meta?.store).filter(Boolean)).size
+    const lastSeen = all.reduce((m, t) => (t.last_seen > m ? t.last_seen : m), '')
+    const wide = isDesktop && (e.viewport?.columns ?? 160) >= 120
+    const current = shown.find(t => t.id === sel) ?? null
 
-    // The opened ticket, drawn right under its row.
-    const detail = (t: Ticket) => (
-      <Box key={`detail-${t.id}`} flexDirection="column" gap={1} paddingX={2} paddingY={1} marginLeft={2} marginBottom={1}
-        borderStyle="round" borderColor={SEVERITY_COLOR[t.severity]}>
-        <Box flexDirection="row" justifyContent="space-between" alignItems="flex-start" flexWrap="wrap" gap={1}>
-          <Box flexDirection="column" flexShrink={1}>
-            {heading(`dt-${t.id}`, 3, `#${t.id}  ${shortTitle(t)}`)}
-            <Box flexDirection="row" gap={1} flexWrap="wrap">
-              {pill(`ds-${t.id}`, t.status.toUpperCase(), STATUS_COLOR[t.status])}
-              {pill(`dv-${t.id}`, t.severity.toUpperCase(), SEVERITY_COLOR[t.severity])}
-              {t.meta?.missing_in && pill(`dm-${t.id}`, t.meta.missing_in, MISSING_COLOR(t.meta.missing_in))}
-              {t.reopen_count > 0 && pill(`dr-${t.id}`, `REGRESSION x${t.reopen_count}`, 'error')}
-            </Box>
+    // The selected ticket. Beside the list on a wide pane, under its row otherwise.
+    const inspector = (t: Ticket) => (
+      <Box key={`detail-${t.id}`} flexDirection="column" gap={1} paddingX={2} paddingY={1}
+        backgroundColor={col(k?.panel, '')} borderStyle="single" borderColor={col(k?.border, SEVERITY_COLOR[t.severity])}>
+        <Box flexDirection="row" justifyContent="space-between" alignItems="flex-start">
+          <Box flexDirection="row" gap={1} flexWrap="wrap">
+            {chip(`ds-${t.id}`, t.status.toUpperCase(), t.status === 'open' ? 'rose' : t.status === 'fixed' ? 'emerald' : 'cyan')}
+            {chip(`dv-${t.id}`, t.severity.toUpperCase(), t.severity === 'high' ? 'solidRose' : t.severity === 'medium' ? 'amber' : 'ghost')}
+            {t.meta?.missing_in && chip(`dm-${t.id}`, t.meta.missing_in, tone(t.meta.missing_in))}
+            {t.reopen_count > 0 && chip(`dr-${t.id}`, `REGRESSION x${t.reopen_count}`, 'rose')}
           </Box>
-          <Button key="close-detail" label="Close  ✕" onPress={() => void update($, selected, () => null)} />
+          <Button key="close-detail" plain label="✕" onPress={() => void update($, selected, () => null)} />
+        </Box>
+        {heading(`dt-${t.id}`, 2, `#${t.id} ${shortTitle(t)}`)}
+        <Text wrap="wrap">
+          {t.meta?.country && <Text color={col(k?.muted, 'subtle')}>Where: </Text>}
+          {t.meta?.country && <Text bold color={col(k?.strong, 'text')}>{[t.meta.country, t.meta.store, t.meta.city].filter(Boolean).join(' / ')}</Text>}
+          <Text color={col(k?.muted, 'subtle')}>{t.meta?.country ? '   Source: ' : 'Source: '}</Text>
+          <Text color={col(k?.cyanSoft, 'suggestion')}>{t.source}</Text>
+        </Text>
+
+        <Box flexDirection="column" paddingX={1} backgroundColor={col(k?.panel2, '')} borderStyle="single" borderColor={col(k?.hair, 'promptBorder')}>
+          <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
+            <Text color={col(k?.muted, 'subtle')}>Assigned owner:</Text>
+            {Select ? (
+              <Select key={`owner-${t.id}`} value={t.owner ?? ''}
+                options={[...new Set([...ownerList, ...(t.owner ? [t.owner] : [])])].map(o => ({ value: o, label: o }))}
+                onSelect={(value: string) => void act($, cfg, 'Saving...', ['owner', String(t.id), value])} />
+            ) : <Text bold>{t.owner ?? 'Unassigned'}</Text>}
+            <Text color={col(k?.muted, 'subtle')}>{'   Seen count: '}</Text>
+            <Text bold color={col(k?.cyanSoft, 'suggestion')}>{`${t.occurrences}x`}</Text>
+          </Box>
+          <Text color={col(k?.muted, 'subtle')}>
+            {'First seen  '}<Text color={col(k?.text, 'text')}>{t.first_seen.replace('T', ' ').replace('Z', ' UTC')}</Text>
+            {'    Last seen  '}<Text color={col(k?.text, 'text')}>{`${t.last_seen.replace('T', ' ').replace('Z', ' UTC')} (${ago(t.last_seen)})`}</Text>
+          </Text>
         </Box>
 
-        <Box flexDirection="row" gap={3} flexWrap="wrap">
-          {t.meta?.country && <Text><Text dimColor>Where </Text><Text bold>{[t.meta.country, t.meta.store, t.meta.city].filter(Boolean).join(' / ')}</Text></Text>}
-          {t.meta?.code && <Text><Text dimColor>{`${t.meta.code_label ?? 'Code'} `}</Text><Text bold>{t.meta.code}</Text>{t.meta.item ? ` '${t.meta.item}'` : ''}</Text>}
-          <Text><Text dimColor>Source </Text><Text bold>{t.source}</Text></Text>
-          <Text><Text dimColor>Seen </Text><Text bold>{`${t.occurrences}x`}</Text><Text dimColor>{`  last ${t.last_seen.replace('T', ' ').replace('Z', '')}`}</Text></Text>
-        </Box>
-
-        <Box flexDirection="row" gap={1} alignItems="center">
-          <Text dimColor>Owner</Text>
-          {Select ? (
-            <Select key={`owner-${t.id}`} value={t.owner ?? ''}
-              options={[...new Set([...ownerList, ...(t.owner ? [t.owner] : [])])].map(o => ({ value: o, label: o }))}
-              onSelect={(value: string) => void act($, cfg, 'Saving...', ['owner', String(t.id), value])} />
-          ) : (
-            <Text bold>{t.owner ?? 'Unassigned'}</Text>
+        <Box flexDirection="row" gap={1} flexWrap="wrap">
+          {t.meta?.code && (
+            <Button key={`copy-code-${t.id}`} label={`# Copy ${t.meta.code_label ?? 'code'} (${t.meta.code})`}
+              onPress={() => void copy($, e.surface, `${t.meta?.code_label ?? 'code'} ${t.meta?.code}`, t.meta?.code ?? '')} />
           )}
+          {t.meta?.url && (
+            <Button key={`open-link-${t.id}`}
+              label={t.meta.url.includes('sentry') ? 'Open in Sentry ↗' : t.meta.url.includes('github') ? 'Open in GitHub ↗' : t.meta.url.includes('aws') ? 'Open in AWS ↗' : 'Open link ↗'}
+              onPress={() => void openLink($, t.meta?.url ?? '')} />
+          )}
+          <Button key={`copy-ticket-${t.id}`} label="Copy ticket" onPress={() => void copy($, e.surface, `ticket #${t.id}`, ticketText(t))} />
+          <Button key={`copy-steps-${t.id}`} label="Copy steps"
+            onPress={() => void copy($, e.surface, 'the solution steps', t.steps.map((s, i) => `${i + 1}. ${s}`).join('\n'))} />
         </Box>
 
-        {Markdown && isDesktop
-          ? <Markdown key={`dd-${t.id}`} text={mdText(t.detail ?? '').replace(/\n/g, '  \n')} />
-          : <Text wrap="wrap">{t.detail ?? ''}</Text>}
+        <Box flexDirection="column">
+          <Box flexDirection="row" justifyContent="space-between">
+            <Text bold color={col(k?.muted, 'subtle')}>DIAGNOSTIC EVIDENCE</Text>
+            <Text color={col(k?.cyanSoft, 'suggestion')}>{t.check_name}</Text>
+          </Box>
+          {Code && isDesktop
+            ? <Code key={`dd-${t.id}`} source={t.detail ?? ''} language="log" wrap="wrap" />
+            : <Text wrap="wrap">{t.detail ?? ''}</Text>}
+          {t.action && <Text wrap="wrap" color={col(k?.text, 'text')}>{t.action}</Text>}
+        </Box>
 
         <Box flexDirection="column" gap={0}>
-          {heading(`dsol-${t.id}`, 3, `Solution  ${doneCount(t)}/${t.steps.length}`)}
+          <Box flexDirection="row" justifyContent="space-between">
+            {heading(`dsol-${t.id}`, 3, 'Solution workflow')}
+            <Text color={col(k?.cyanSoft, 'suggestion')}>{`${doneCount(t)}/${t.steps.length} done`}</Text>
+          </Box>
           {Svg && (
             <Svg key={`progress-${t.id}-${t.steps_done.length}`} isInteractive
-              source={progressSvg(doneCount(t), t.steps.length, 560)} alt={`${doneCount(t)} of ${t.steps.length} steps done`} />
+              source={progressSvg(doneCount(t), t.steps.length, wide ? 460 : 560)} alt={`${doneCount(t)} of ${t.steps.length} steps done`} />
           )}
           {t.steps.map((step, i) => {
             const isDone = t.steps_done.includes(i)
             return (
-              <Box key={`step-row-${t.id}-${i}`} flexDirection="row" gap={1} hover={{ backgroundColor: 'inactive' }}>
+              <Box key={`step-row-${t.id}-${i}`} flexDirection="row" gap={1} paddingX={1} marginTop={1}
+                backgroundColor={col(k?.panel2, '')} hover={{ backgroundColor: col(k?.raised, 'inactive') }}>
                 <Button key={`step-${t.id}-${i}`} plain label={isDone ? '☑' : '☐'}
                   onPress={() => void act($, cfg, 'Saving...', ['step', String(t.id), String(i)])} />
-                <Text wrap="wrap" color={isDone ? 'success' : undefined} strikethrough={isDone}>{`${i + 1}. ${step}`}</Text>
+                <Text wrap="wrap" color={col(isDone ? k?.ghost : k?.strong, isDone ? 'subtle' : 'text')} strikethrough={isDone}>
+                  {`${i + 1}. ${step}`}
+                </Text>
               </Box>
             )
           })}
         </Box>
 
         {checkResult && checkResult.id === t.id && (
-          <Box paddingX={1} borderStyle="round" borderColor={checkResult.ok ? 'success' : 'warning'}>
-            <Text color={checkResult.ok ? 'success' : 'warning'} wrap="wrap">
+          <Box paddingX={1} borderStyle="single" borderColor={col(checkResult.ok ? C.emerald : C.amberSoft, checkResult.ok ? 'success' : 'warning')}>
+            <Text color={col(checkResult.ok ? C.emerald : C.amberSoft, checkResult.ok ? 'success' : 'warning')} wrap="wrap">
               {`${checkResult.ok ? '✓ Verified: ' : '! Not yet: '}${checkResult.message}`}
             </Text>
           </Box>
         )}
-        {t.fixed_note && <Text color="success" wrap="wrap">{`Fixed ${t.fixed_at}: ${t.fixed_note}`}</Text>}
+        {t.fixed_note && <Text color={col(C.emerald, 'success')} wrap="wrap">{`Fixed ${t.fixed_at}: ${t.fixed_note}`}</Text>}
 
         {t.status === 'fixed' || t.status === 'resolved' ? (
           <Box flexDirection="row" gap={1} flexWrap="wrap">
             <Button key={`verify-${t.id}`} label={working === 'Verifying...' ? 'Verifying...' : '↻ Verify now'}
               onPress={() => { if (!working) void verify($, cfg, t.id) }} />
-            <Button key={`reopen-${t.id}`} label="Reopen"
-              onPress={() => void act($, cfg, 'Saving...', ['reopen', String(t.id)])} />
+            <Button key={`reopen-${t.id}`} label="Reopen" onPress={() => void act($, cfg, 'Saving...', ['reopen', String(t.id)])} />
           </Box>
         ) : confirmId === t.id ? (
-          <Box flexDirection="column" gap={1} padding={1} borderStyle="double" borderColor="success">
+          <Box flexDirection="column" gap={1} padding={1} borderStyle="single" borderColor={col(C.emerald, 'success')}>
             {heading(`dc-${t.id}`, 3, `Confirm #${t.id} is fixed?`)}
             {!(checkResult?.id === t.id && checkResult.ok) && (
-              <Text color="warning" wrap="wrap">
-                Verify has not passed yet. If it is still broken, the next daily check will reopen it as a regression.
+              <Text color={col(C.amberSoft, 'warning')} wrap="wrap">
+                Verify has not passed yet. If it is still broken, the next run will reopen it as a regression.
               </Text>
             )}
             {Input ? (
               <Input key={`fix-${t.id}`} label="What did you do?" placeholder="e.g. fixed the config and re-ran the job"
-                submitLabel="Yes, mark fixed" autoFocus
-                onSubmit={(value: string) => void confirmFix($, cfg, t.id, value)} />
+                submitLabel="Yes, mark fixed" autoFocus onSubmit={(value: string) => void confirmFix($, cfg, t.id, value)} />
             ) : (
-              <Button key={`fix-${t.id}`} label="Yes, mark fixed" variant="primary"
-                onPress={() => void confirmFix($, cfg, t.id, '')} />
+              <Button key={`fix-${t.id}`} label="Yes, mark fixed" variant="primary" onPress={() => void confirmFix($, cfg, t.id, '')} />
             )}
             <Button key={`cancel-fix-${t.id}`} label="Cancel" onPress={() => void update($, confirming, () => null)} />
           </Box>
         ) : (
           <Box flexDirection="row" gap={1} flexWrap="wrap">
-            <Button key={`ask-fix-${t.id}`} label="✓ Mark fixed..." variant="primary"
-              onPress={() => void update($, confirming, () => t.id)} />
+            <Button key={`ask-fix-${t.id}`} label="✓ Mark fixed" variant="primary" onPress={() => void update($, confirming, () => t.id)} />
             <Button key={`verify-${t.id}`} label={working === 'Verifying...' ? 'Verifying...' : '↻ Verify now'}
               onPress={() => { if (!working) void verify($, cfg, t.id) }} />
             {t.status === 'open' ? (
-              <Button key={`ack-${t.id}`} label="Acknowledge (known)"
-                onPress={() => void act($, cfg, 'Saving...', ['ack', String(t.id)])} />
+              <Button key={`ack-${t.id}`} label="Acknowledge" onPress={() => void act($, cfg, 'Saving...', ['ack', String(t.id)])} />
             ) : (
-              <Button key={`unack-${t.id}`} label="Back to open"
-                onPress={() => void act($, cfg, 'Saving...', ['unack', String(t.id)])} />
+              <Button key={`unack-${t.id}`} label="Back to open" onPress={() => void act($, cfg, 'Saving...', ['unack', String(t.id)])} />
             )}
           </Box>
         )}
 
-        <Box flexDirection="row" gap={1} flexWrap="wrap">
-          {t.meta?.url && (
-            <Button key={`open-link-${t.id}`}
-              label={t.meta.url.includes('sentry') ? 'Open in Sentry ↗' : t.meta.url.includes('github') ? 'Open in GitHub ↗' : t.meta.url.includes('aws') ? 'Open in AWS ↗' : 'Open link ↗'}
-              onPress={() => void openLink($, t.meta?.url ?? '')} />
-          )}
-          <Button key={`copy-ticket-${t.id}`} label="Copy ticket"
-            onPress={() => void copy($, e.surface, `ticket #${t.id}`, ticketText(t))} />
-          {t.meta?.code && (
-            <Button key={`copy-code-${t.id}`} label={`Copy ${t.meta.code_label ?? 'code'}`}
-              onPress={() => void copy($, e.surface, `${t.meta?.code_label ?? 'code'} ${t.meta?.code}`, t.meta?.code ?? '')} />
-          )}
-          <Button key={`copy-steps-${t.id}`} label="Copy steps"
-            onPress={() => void copy($, e.surface, 'the solution steps', t.steps.map((s, i) => `${i + 1}. ${s}`).join('\n'))} />
-        </Box>
-
         <Box flexDirection="column" gap={0}>
-          <Text bold dimColor>History</Text>
-          {Svg && t.events.length > 0 && (
-            <Svg key={`timeline-${t.id}-${t.events.length}`} isInteractive source={timelineSvg(t, 560)} alt="ticket history timeline" />
-          )}
-          {!Svg && t.events.map((ev, i) => (
-            <Text key={`ev-${i}`} dimColor>{`${ev.at}  ${ev.kind}${ev.note ? `  ${ev.note}` : ''}`}</Text>
+          <Text bold color={col(k?.muted, 'subtle')}>ACTIVITY TRAIL</Text>
+          {t.events.slice(-8).map((ev, i) => (
+            <Box key={`ev-${i}`} flexDirection="row" justifyContent="space-between">
+              <Text wrap="truncate-end">
+                <Text color={col(/fix|verified/.test(ev.kind) ? C.emerald : /reopen|spike|fail/.test(ev.kind) ? C.roseSoft : ev.kind === 'opened' ? C.amberSoft : C.cyan, 'suggestion')}>{'● '}</Text>
+                <Text color={col(k?.text, 'text')}>{`${ev.kind}${ev.note ? `: ${ev.note}` : ''}`}</Text>
+              </Text>
+              <Text color={col(k?.ghost, 'subtle')}>{ev.at.slice(5, 16).replace('T', ' ')}</Text>
+            </Box>
           ))}
         </Box>
       </Box>
     )
 
+    const row = (t: Ticket) => {
+      const isSel = t.id === sel
+      return (
+        <Box key={`t-${t.id}`} flexDirection="row" gap={1} paddingX={1} alignItems="center"
+          backgroundColor={col(isSel ? k?.raised : undefined, isSel ? 'promptBorder' : '')}
+          hover={{ backgroundColor: col(k?.raised, 'inactive') }}>
+          <Text color={col(isSel ? C.cyan : k?.bg, isSel ? 'suggestion' : 'text')}>{isSel ? '▌' : ' '}</Text>
+          {Svg ? (
+            <Svg key={`dot-${t.id}`} isInteractive width={14} height={14}
+              source={dotSvg(SEV[t.severity], t.status === 'open' && t.severity === 'high')} alt={t.severity} />
+          ) : <Text color={SEVERITY_COLOR[t.severity]}>●</Text>}
+          <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+            <Box flexDirection="row" gap={1}>
+              <Text color={col(isSel ? '#001e2c' : C.cyanSoft, 'suggestion')} backgroundColor={col(isSel ? C.cyan : undefined, '')}>{`#${t.id}`}</Text>
+              <Button key={`pick-${t.id}`} plain label={shortTitle(t)}
+                onPress={() => void update($, selected, v => (v === t.id ? null : t.id))} />
+            </Box>
+            <Box flexDirection="row" gap={1} flexWrap="wrap">
+              {t.meta?.missing_in && chip(`pm-${t.id}`, t.meta.missing_in, tone(t.meta.missing_in))}
+              {t.status !== 'open' && chip(`ps-${t.id}`, t.status, t.status === 'fixed' ? 'emerald' : 'cyan')}
+              {t.reopen_count > 0 && chip(`pr-${t.id}`, `regression x${t.reopen_count}`, 'rose')}
+              {t.owner && <Text color={col(k?.muted, 'subtle')}>{`· ${t.owner}`}</Text>}
+              {t.steps_done.length > 0 && <Text color={col(k?.cyanSoft, 'subtle')}>{`· ${doneCount(t)}/${t.steps.length}`}</Text>}
+            </Box>
+          </Box>
+          <Box flexDirection="column" alignItems="flex-end">
+            <Text color={col(t.occurrences >= 10 ? C.amberSoft : k?.text, 'text')}>{`Seen ${t.occurrences}x`}</Text>
+            <Text color={col(k?.ghost, 'subtle')}>{ago(t.last_seen)}</Text>
+          </Box>
+        </Box>
+      )
+    }
+
+    const list = (
+      <Box flexDirection="column" gap={0} flexGrow={1} flexShrink={1}>
+        {shown.length === 0 && <Text color={col(C.emerald, 'success')}>No tickets match these filters.</Text>}
+        {[...groups.entries()].map(([country, byStore]) => {
+          const total = [...byStore.values()].reduce((a, l) => a + l.length, 0)
+          const highs = [...byStore.values()].flat().filter(t => t.severity === 'high' && t.status === 'open').length
+          return (
+            <Box key={`c-${country}`} flexDirection="column" marginBottom={1} borderStyle="single" borderColor={col(k?.hair, 'promptBorder')}>
+              <Box flexDirection="row" justifyContent="space-between" paddingX={1} backgroundColor={col(k?.panel2, '')}>
+                <Text bold color={col(k?.strong, 'claude')}>{`▾ ${country.toUpperCase()} · ${total}`}</Text>
+                {highs > 0 && <Text color={col(C.roseSoft, 'error')}>{`${highs} high`}</Text>}
+              </Box>
+              {[...byStore.entries()].map(([store, items]) => (
+                <Box key={`s-${country}-${store}`} flexDirection="column">
+                  <Box paddingX={1} marginTop={1}>
+                    <Text color={col(k?.muted, 'subtle')}>{`${store.toUpperCase()}${items[0]?.meta?.city ? ` · ${items[0].meta.city.toUpperCase()}` : ''}`}</Text>
+                  </Box>
+                  {items.flatMap(t => [row(t), ...(!wide && t.id === sel ? [inspector(t)] : [])])}
+                </Box>
+              ))}
+            </Box>
+          )
+        })}
+      </Box>
+    )
+
     return (
-      <Box flexDirection="column" gap={1} padding={1}>
+      <Box flexDirection="column" gap={1} padding={1} backgroundColor={col(k?.bg, '')}>
         <Box flexDirection="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1}>
-          {heading('title', 1, 'Ops tickets')}
+          <Box flexDirection="row" gap={1} alignItems="center">
+            <Text bold color={col(C.roseSoft, 'error')}>⚡</Text>
+            {heading('title', 1, 'Ops Incidents')}
+            {chip('live', 'LIVE FEED', 'ghost')}
+            <Text color={col(C.emerald, 'success')}>{`● Synced${lastSeen ? ` (${ago(lastSeen)})` : ''}`}</Text>
+          </Box>
           <Box flexDirection="row" gap={1} flexWrap="wrap">
-            <Button key="run" label={working ?? '▶ Run checks'} variant="primary"
-              onPress={() => { if (!working) void runAll($, cfg, true) }} />
+            <Button key="run" label={working ?? '▶ Run checks'} variant="primary" onPress={() => { if (!working) void runAll($, cfg, true) }} />
             <Button key="refresh" label="↻ Refresh" onPress={() => void reload($, cfg)} />
-            <Button key="export" label={working === 'Exporting...' ? 'Exporting...' : '⤓ Export to Excel'}
+            <Button key="export" label={working === 'Exporting...' ? 'Exporting...' : '⤓ Export'}
               onPress={() => { if (!working) void exportOpen($, cfg, status, src, who) }} />
-            <Button key="copy-list" label="Copy list"
-              onPress={() => void copy($, e.surface, `${shown.length} tickets`, listText(shown))} />
+            <Button key="copy-list" label="⧉ Copy list" onPress={() => void copy($, e.surface, `${shown.length} tickets`, listText(shown))} />
+            <Button key="setup" label="⚙ Setup" onPress={() => void (async () => { await loadSetup($, cfg); await $.ui.open({ id: SETUP_PANE, title: 'Ops tickets setup' }) })()} />
           </Box>
         </Box>
 
@@ -590,42 +695,48 @@ export const register: Register = (on, options) => {
         {Svg && all.length > 0 && (
           <Box flexDirection="column" gap={1}>
             <Box flexDirection="row" gap={1} flexWrap="wrap">
-              <Svg key="card-open" isInteractive alt={`${allOpen.length} open`}
-                source={cardSvg('OPEN', allOpen.length, SEV.high, `${allHigh} high priority`, false, 0)} />
-              <Svg key="card-high" isInteractive alt={`${allHigh} high`}
-                source={cardSvg('HIGH PRIORITY', allHigh, SEV.high, 'needs action', allHigh > 0, 70)} />
-              <Svg key="card-ack" isInteractive alt={`${n('acknowledged')} acknowledged`}
-                source={cardSvg('ACKNOWLEDGED', n('acknowledged'), '#3e9bff', 'known / owned', false, 140)} />
-              <Svg key="card-fixed" isInteractive alt={`${n('fixed')} fixed`}
-                source={cardSvg('FIXED', n('fixed'), '#30a46c', 'watching for regressions', false, 210)} />
+              <Svg key="card-open" isInteractive alt={`${allOpen.length} open tickets`} source={kpiSvg({
+                label: 'OPEN TICKETS', value: allOpen.length, accent: C.rose, chip: `${allHigh.length} high priority`,
+                foot: 'New in 24h', footValue: `+${newToday}`, delay: 0 })} />
+              <Svg key="card-high" isInteractive alt={`${allHigh.length} high priority`} source={kpiSvg({
+                label: 'HIGH PRIORITY', value: allHigh.length, accent: C.rose, pulse: allHigh.length > 0,
+                foot: 'Impacted places', footValue: `${places}`, delay: 60 })} />
+              <Svg key="card-ack" isInteractive alt={`${n('acknowledged')} acknowledged`} source={kpiSvg({
+                label: 'ACKNOWLEDGED', value: n('acknowledged'), accent: C.cyan, chip: 'known / owned',
+                foot: 'Avg time to fix', footValue: fmtDur(avgResolve), delay: 120 })} />
+              <Svg key="card-fixed" isInteractive alt={`${n('fixed')} fixed and watched`} source={kpiSvg({
+                label: 'WATCHING FOR REGRESSION', value: n('fixed'), accent: C.emerald,
+                chip: n('fixed') ? `${Math.round((1 - all.filter(t => t.reopen_count > 0 && t.status === 'open').length / Math.max(n('fixed'), 1)) * 100)}% stable` : undefined,
+                foot: 'Verified today', footValue: `${verifiedToday} / ${n('fixed')}`, delay: 180 })} />
             </Box>
-            <Box flexDirection="row" gap={2} flexWrap="wrap">
-              <Svg key="bar-source" isInteractive alt="open tickets by source" source={barSvg('OPEN BY SOURCE', tally(t => t.source), 440)} />
-              <Svg key="bar-owner" isInteractive alt="open tickets by owner" source={barSvg('OPEN BY OWNER', tally(t => t.owner ?? 'Unassigned'), 440)} />
+            <Box flexDirection="row" gap={2} flexWrap="wrap" paddingX={1} paddingY={1} backgroundColor={col(k?.panel, '')}
+              borderStyle="single" borderColor={col(k?.hair, 'promptBorder')}>
+              <Svg key="bar-source" isInteractive alt="open tickets by source" source={shareBarSvg('OPEN BY SOURCE', tally(t => t.source), 300)} />
+              <Svg key="bar-owner" isInteractive alt="open tickets by owner" source={shareBarSvg('OPEN BY OWNER', tally(t => t.owner ?? 'Unassigned'), 300)} />
+              <Svg key="trend" isInteractive alt="new tickets per day, last 14 days" source={trendSvg(all, 300)} />
             </Box>
-            <Svg key="trend" isInteractive alt="new tickets per day, last 14 days" source={trendSvg(all, 900)} />
           </Box>
         )}
 
-        <Box flexDirection="column" gap={0} paddingX={1} borderStyle="round" borderDimColor>
+        <Box flexDirection="column" gap={0} paddingX={1} backgroundColor={col(k?.panel, '')} borderStyle="single" borderColor={col(k?.hair, 'promptBorder')}>
           <Box flexDirection="row" gap={1} flexWrap="wrap" alignItems="center">
-            <Text dimColor>Status </Text>
+            <Text color={col(k?.ghost, 'subtle')}>STATUS:</Text>
             {(['open', 'acknowledged', 'fixed', 'all'] as const).map(s => (
               <Button key={`f-status-${s}`} variant={status === s ? 'primary' : 'secondary'}
-                label={s === 'all' ? 'All' : `${s[0]!.toUpperCase()}${s.slice(1)}  ${n(s)}`}
+                label={s === 'all' ? `All ${all.filter(t => t.status !== 'resolved').length}` : `${s[0]!.toUpperCase()}${s.slice(1)} ${n(s)}`}
                 onPress={() => void update($, statusFilter, () => s)} />
             ))}
           </Box>
           <Box flexDirection="row" gap={1} flexWrap="wrap" alignItems="center">
-            <Text dimColor>Source </Text>
-            <Button key="f-src-all" label="Any" variant={src ? 'secondary' : 'primary'} onPress={() => void update($, sourceFilter, () => null)} />
+            <Text color={col(k?.ghost, 'subtle')}>SOURCE:</Text>
+            <Button key="f-src-all" label="Any source" variant={src ? 'secondary' : 'primary'} onPress={() => void update($, sourceFilter, () => null)} />
             {sources.map(s => (
-              <Button key={`f-src-${s}`} label={s} variant={src === s ? 'primary' : 'secondary'}
-                onPress={() => void update($, sourceFilter, v => (v === s ? null : s))} />
+              <Button key={`f-src-${s}`} label={`${s} (${live.filter(t => t.source === s && t.status === 'open').length})`}
+                variant={src === s ? 'primary' : 'secondary'} onPress={() => void update($, sourceFilter, v => (v === s ? null : s))} />
             ))}
           </Box>
           <Box flexDirection="row" gap={1} flexWrap="wrap" alignItems="center">
-            <Text dimColor>Owner  </Text>
+            <Text color={col(k?.ghost, 'subtle')}>OWNER: </Text>
             <Button key="f-own-all" label="Anyone" variant={who ? 'secondary' : 'primary'} onPress={() => void update($, ownerFilter, () => null)} />
             {ownersSeen.map(o => (
               <Button key={`f-own-${o}`} label={o} variant={who === o ? 'primary' : 'secondary'}
@@ -634,11 +745,11 @@ export const register: Register = (on, options) => {
           </Box>
         </Box>
 
-        {note && <Text color={note.startsWith('Failed') || note.startsWith('Could not') ? 'error' : 'success'} wrap="wrap">{note}</Text>}
+        {note && <Text color={col(/fail|could not/i.test(note) ? C.roseSoft : C.emerald, /fail|could not/i.test(note) ? 'error' : 'success')} wrap="wrap">{note}</Text>}
 
         {exportPath && (
           <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
-            <Text color="success" wrap="truncate-middle">{exportPath}</Text>
+            <Text color={col(C.emerald, 'success')} wrap="truncate-middle">{exportPath}</Text>
             <Button key="open-export" label="Open file" variant="primary" onPress={() => void openExport($, exportPath, false)} />
             <Button key="show-export" label="Show in folder" onPress={() => void openExport($, exportPath, true)} />
             <Button key="copy-export" label="Copy path" onPress={() => void copy($, e.surface, 'the file path', exportPath)} />
@@ -646,39 +757,12 @@ export const register: Register = (on, options) => {
           </Box>
         )}
 
-        {shown.length === 0 && <Text color="success">No tickets match these filters.</Text>}
-
-        {[...groups.entries()].map(([country, byStore]) => (
-          <Box key={`c-${country}`} flexDirection="column" gap={0}>
-            {heading(`ch-${country}`, 2, `${country}  ·  ${[...byStore.values()].reduce((a, l) => a + l.length, 0)}`, 'claude')}
-            {[...byStore.entries()].map(([store, list]) => (
-              <Box key={`s-${country}-${store}`} flexDirection="column" paddingLeft={1} marginBottom={1}>
-                <Text bold>{`${store}${list[0]?.meta?.city ? `  ·  ${list[0].meta.city}` : ''}`}</Text>
-                {list.flatMap(t => [
-                  <Box key={`t-${t.id}`} flexDirection="row" gap={1} paddingLeft={1} alignItems="center"
-                    backgroundColor={t.id === sel ? 'promptBorder' : undefined}
-                    hover={{ backgroundColor: 'inactive' }}>
-                    {Svg ? (
-                      <Svg key={`dot-${t.id}`} isInteractive width={20} height={20}
-                        source={dotSvg(SEV[t.severity], t.status === 'open' && t.severity === 'high')} alt={t.severity} />
-                    ) : (
-                      <Text color={SEVERITY_COLOR[t.severity]}>●</Text>
-                    )}
-                    <Button key={`pick-${t.id}`} plain
-                      label={`${t.id === sel ? '▾' : '▸'} #${t.id} ${shortTitle(t)}`}
-                      onPress={() => void update($, selected, v => (v === t.id ? null : t.id))} />
-                    {t.meta?.missing_in && <Text color={MISSING_COLOR(t.meta.missing_in)}>{t.meta.missing_in}</Text>}
-                    {t.status !== 'open' && pill(`ps-${t.id}`, t.status, STATUS_COLOR[t.status])}
-                    {t.reopen_count > 0 && pill(`pr-${t.id}`, `regression x${t.reopen_count}`, 'error')}
-                    {t.steps_done.length > 0 && <Text dimColor>{`${doneCount(t)}/${t.steps.length}`}</Text>}
-                    {t.owner && <Text dimColor>{`· ${t.owner}`}</Text>}
-                  </Box>,
-                  ...(t.id === sel ? [detail(t)] : []),
-                ])}
-              </Box>
-            ))}
+        {wide ? (
+          <Box flexDirection="row" gap={1} alignItems="flex-start">
+            <Box flexDirection="column" width={current ? '56%' : '100%'}>{list}</Box>
+            {current && <Box flexDirection="column" width="44%">{inspector(current)}</Box>}
           </Box>
-        ))}
+        ) : list}
       </Box>
     )
   })
@@ -738,7 +822,8 @@ export const register: Register = (on, options) => {
 
     const card = (key: string, title: string, body: unknown, ok?: boolean | null) => (
       <Box key={key} flexDirection="column" gap={1} paddingX={2} paddingY={1}
-        borderStyle="round" borderColor={ok === true ? 'success' : ok === false ? 'warning' : 'promptBorder'}>
+        backgroundColor={isDesktop ? C.panel : undefined}
+        borderStyle="single" borderColor={ok === true ? (isDesktop ? C.emerald : 'success') : ok === false ? (isDesktop ? C.amberSoft : 'warning') : (isDesktop ? C.hair : 'promptBorder')}>
         {hd(`${key}-h`, 3, title)}
         {body as never}
       </Box>
@@ -927,7 +1012,7 @@ export const register: Register = (on, options) => {
     )
 
     return (
-      <Box flexDirection="column" gap={1} padding={1}>
+      <Box flexDirection="column" gap={1} padding={1} backgroundColor={isDesktop ? C.canvas : undefined}>
         {hd('w-title', 1, 'Set up ops tickets')}
         {s.error && <Text color="error" wrap="wrap">{s.error}</Text>}
         <Box flexDirection="row" gap={1} flexWrap="wrap">

@@ -190,12 +190,19 @@ def default_owner(cfg, packs, check_name, meta):
         if owner:
             return owner
     rules = cfg["owner_rules"]
-    return rules.get(source_of({"meta": meta, "check_name": check_name}), rules.get("default"))
+    return rules.get(source_of({"meta": meta, "check_name": check_name}, packs), rules.get("default"))
 
 
-def source_of(t):
+def source_of(t, packs=()):
     m = t.get("meta") or {}
-    return m.get("source") or m.get("pack") or t.get("check_name") or "Checks"
+    if m.get("source"):
+        return m["source"]
+    for p in packs:  # a pack can name the source of tickets it opened before it set meta.source
+        fn = p.get("source_of")
+        name = fn(t) if fn else None
+        if name:
+            return name
+    return m.get("pack") or t.get("check_name") or "Checks"
 
 
 def solution_steps(t, packs):
@@ -409,7 +416,7 @@ def tickets_json(cfg, packs, db):
             "select at, kind, note from events where ticket_id=? order by id", (r["id"],))]
         t["steps"] = solution_steps(t, packs)
         t["steps_done"] = json.loads(t["steps_done"]) if t.get("steps_done") else []
-        t["source"] = source_of(t)
+        t["source"] = source_of(t, packs)
         result.append(t)
     return result
 

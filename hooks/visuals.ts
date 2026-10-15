@@ -1,203 +1,126 @@
-// Pure SVG builders for the desktop pane. Each returns an <svg> string drawn by
-// the Svg element with isInteractive (sandboxed: CSS animation, :hover, <title>
-// tooltips, no script). Colours carry their own light/dark pair.
+// "Obsidian Telemetry" pieces for the desktop pane: deep slate surfaces, 1px hairlines,
+// signal accents, Geist for words and a monospace for every number and id. Each builder
+// returns an <svg> string drawn by Svg with isInteractive (CSS animation, :hover, <title>).
 
 import type { Ticket } from '../types'
 
-export const SEV = { high: '#e5484d', medium: '#f5a524', low: '#8b8d98' } as const
-const STATUS = { open: '#e5484d', acknowledged: '#3e9bff', fixed: '#30a46c', resolved: '#8b8d98' } as const
-const PALETTE = ['#6e56cf', '#3e9bff', '#12a594', '#f5a524', '#e5484d', '#d6409f', '#8b8d98', '#30a46c']
+export const C = {
+  canvas: '#0b1326', panel: '#0f172a', panel2: '#131b2e', raised: '#1e293b', hair: '#1e293b', border: '#334155',
+  text: '#dae2fd', strong: '#f8fafc', muted: '#94a3b8', ghost: '#475569',
+  cyan: '#38bdf8', cyanSoft: '#8ed5ff', emerald: '#4edea3', amber: '#f59e0b', amberSoft: '#ffc174',
+  rose: '#f43f5e', roseSoft: '#ffb4ab',
+} as const
+
+export const SEV = { high: C.rose, medium: C.amber, low: C.ghost } as const
+const SERIES = [C.cyan, C.amber, C.emerald, C.rose, '#a78bfa', '#f472b6', C.muted, '#22d3ee']
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
-const BASE_CSS = `
-  .t { font: 600 11px system-ui, -apple-system, Segoe UI, sans-serif; fill: #6b6f7a; letter-spacing: .04em }
-  .v { font: 700 26px system-ui, -apple-system, Segoe UI, sans-serif; fill: #1c1d21 }
-  .s { font: 500 11px system-ui, -apple-system, Segoe UI, sans-serif; fill: #6b6f7a }
-  .card { fill: #ffffff; stroke: #e4e5e9 }
-  .track { fill: #eceef1 }
-  @media (prefers-color-scheme: dark) {
-    .v { fill: #f1f1f3 } .t, .s { fill: #a0a3ad }
-    .card { fill: #1f2024; stroke: #2f3036 } .track { fill: #2a2b30 }
-  }
-  .rise { animation: rise .55s cubic-bezier(.2,.8,.2,1) both }
-  @keyframes rise { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+const CSS = `
+  .lbl { font: 500 11px "JetBrains Mono", "Cascadia Mono", Consolas, ui-monospace, monospace; letter-spacing: .06em; fill: ${C.muted} }
+  .num { font: 700 38px "Geist", "Segoe UI", system-ui, sans-serif; font-variant-numeric: tabular-nums; letter-spacing: -.03em; fill: ${C.strong} }
+  .mono { font: 500 12px "JetBrains Mono", "Cascadia Mono", Consolas, ui-monospace, monospace; font-variant-numeric: tabular-nums; fill: ${C.text} }
+  .txt { font: 400 12px "Geist", "Segoe UI", system-ui, sans-serif; fill: ${C.muted} }
+  .card { fill: ${C.panel}; stroke: ${C.hair} } .card:hover { stroke: ${C.border} }
+  .track { fill: ${C.raised} }
+  .rise { animation: rise .5s cubic-bezier(.2,.8,.2,1) both }
+  @keyframes rise { from { opacity: 0; transform: translateY(5px) } to { opacity: 1; transform: none } }
   .grow { transform-box: fill-box; transform-origin: left; animation: grow .8s cubic-bezier(.2,.8,.2,1) both }
   @keyframes grow { from { transform: scaleX(0) } to { transform: scaleX(1) } }
-  .pulse { transform-box: fill-box; transform-origin: center; animation: pulse 1.6s ease-out infinite }
-  @keyframes pulse { 0% { opacity: .7; transform: scale(1) } 100% { opacity: 0; transform: scale(2.6) } }
-  .seg:hover { opacity: .8 } .card:hover { stroke: #6e56cf }
-  .draw { stroke-dasharray: 1000; stroke-dashoffset: 1000; animation: draw 1.4s ease-out forwards }
+  .glow { animation: glow 1.8s ease-in-out infinite }
+  @keyframes glow { 0%,100% { opacity: .35 } 50% { opacity: .9 } }
+  .draw { stroke-dasharray: 1600; stroke-dashoffset: 1600; animation: draw 1.6s ease-out forwards }
   @keyframes draw { to { stroke-dashoffset: 0 } }
+  .seg:hover { opacity: .78 }
 `
+const svg = (w: number, h: number, body: string) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><style>${CSS}</style>${body}</svg>`
 
-// Bigger, standalone pieces: each is its own Svg so the pane lays them out and
-// wraps them at full size instead of scaling one wide picture down.
-const BIG_CSS = BASE_CSS + `
-  .t { font-size: 13px } .v { font-size: 36px } .s { font-size: 13px }
-`
-
-/** One stat card: label, big number, sub-line; the dot pulses when `pulse`. */
-export function cardSvg(label: string, value: number, color: string, sub: string, pulse: boolean, delay = 0): string {
-  const w = 210
-  const h = 104
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><style>${BIG_CSS}</style>
-    <g class="rise" style="animation-delay:${delay}ms"><title>${esc(`${value} ${label.toLowerCase()}: ${sub}`)}</title>
-    <rect class="card" x="1" y="1" width="${w - 2}" height="${h - 2}" rx="14"/>
-    <rect x="1" y="1" width="6" height="${h - 2}" rx="3" fill="${color}"/>
-    <text class="t" x="22" y="30">${esc(label)}</text>
-    ${pulse ? `<circle cx="${w - 24}" cy="25" r="7" fill="${color}" class="pulse"/>` : ''}<circle cx="${w - 24}" cy="25" r="7" fill="${color}"/>
-    <text class="v" x="22" y="70">${value}</text>
-    <text class="s" x="22" y="90">${esc(sub)}</text></g></svg>`
+/** A KPI card: accent top rule, mono label, big tabular number, tinted chip, footer metric. */
+export function kpiSvg(o: {
+  label: string; value: number; accent: string; chip?: string; foot: string; footValue: string; pulse?: boolean; delay?: number
+}): string {
+  const w = 228
+  const h = 112
+  const chipW = o.chip ? o.chip.length * 7 + 14 : 0
+  const valueW = String(o.value).length * 23
+  return svg(w, h, `<g class="rise" style="animation-delay:${o.delay ?? 0}ms"><title>${esc(`${o.value} ${o.label.toLowerCase()}`)}</title>
+    <rect class="card" x=".5" y=".5" width="${w - 1}" height="${h - 1}" rx="4"/>
+    <rect x=".5" y=".5" width="${w - 1}" height="2" fill="${o.accent}"/>
+    <text class="lbl" x="14" y="26">${esc(o.label)}</text>
+    ${o.pulse ? `<circle cx="${w - 18}" cy="22" r="9" fill="${o.accent}" class="glow" opacity=".4"/>` : ''}
+    <circle cx="${w - 18}" cy="22" r="4.5" fill="${o.accent}"/>
+    <text class="num" x="14" y="68">${o.value}</text>
+    ${o.chip ? `<rect x="${22 + valueW}" y="50" width="${chipW}" height="20" rx="3" fill="${o.accent}" fill-opacity=".12" stroke="${o.accent}" stroke-opacity=".3"/>
+      <text class="mono" x="${29 + valueW}" y="64" style="font-size:11px;fill:${o.accent}">${esc(o.chip)}</text>` : ''}
+    <line x1="14" y1="84" x2="${w - 14}" y2="84" stroke="${C.hair}"/>
+    <text class="txt" x="14" y="102">${esc(o.foot)}</text>
+    <text class="mono" x="${w - 14}" y="102" text-anchor="end">${esc(o.footValue)}</text></g>`)
 }
 
-/** A labelled stacked bar with a legend that wraps onto as many lines as it needs. */
-export function barSvg(title: string, counts: [string, number][], width = 620): string {
+/** Stacked bar with a mono share line on top and a wrapping legend underneath. */
+export function shareBarSvg(title: string, counts: [string, number][], width = 380, short = (s: string) => s): string {
   const total = counts.reduce((a, [, n]) => a + n, 0) || 1
+  const shares = counts.slice(0, 4).map(([n, v]) => `${short(n).toUpperCase().slice(0, 3)} ${Math.round((v / total) * 100)}%`).join(' · ')
   let x = 0
   let segs = ''
   let legend = ''
   let lx = 0
-  let ly = 66
+  let ly = 82
   counts.forEach(([name, n], i) => {
     const w = (n / total) * width
-    const c = PALETTE[i % PALETTE.length]
-    segs += `<rect class="seg grow" style="animation-delay:${150 + i * 70}ms" x="${x}" y="24" width="${Math.max(w - 3, 2)}" height="18" rx="5" fill="${c}"><title>${esc(`${name}: ${n}`)}</title></rect>`
-    const label = `${name}  ${n}`
-    const lw = label.length * 7.6 + 30
+    const c = SERIES[i % SERIES.length]
+    segs += `<rect class="seg grow" style="animation-delay:${120 + i * 60}ms" x="${x.toFixed(1)}" y="40" width="${Math.max(w - 2, 2).toFixed(1)}" height="8" fill="${c}"><title>${esc(`${name}: ${n}`)}</title></rect>`
+    const label = `${short(name)}: ${n}`
+    const lw = label.length * 6.9 + 22
     if (lx + lw > width) {
       lx = 0
-      ly += 22
+      ly += 18
     }
-    legend += `<g><title>${esc(`${name}: ${n} open`)}</title><circle cx="${lx + 6}" cy="${ly - 4}" r="5.5" fill="${c}"/><text class="s" x="${lx + 17}" y="${ly}">${esc(label)}</text></g>`
+    legend += `<circle cx="${lx + 4}" cy="${ly - 4}" r="3.5" fill="${c}"/><text class="txt" x="${lx + 12}" y="${ly}">${esc(label)}</text>`
     lx += lw
     x += w
   })
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${ly + 10}" viewBox="0 0 ${width} ${ly + 10}"><style>${BIG_CSS}</style>
-    <g class="rise"><text class="t" x="0" y="14">${esc(title)}</text>
-    <rect class="track" x="0" y="24" width="${width}" height="18" rx="5"/>${segs}${legend}</g></svg>`
+  return svg(width, ly + 8, `<g class="rise">
+    <text class="lbl" x="0" y="12">${esc(`${title} (${total})`)}</text>
+    <text class="mono" x="0" y="30" style="font-size:11px;fill:${C.cyanSoft}">${esc(shares)}</text>
+    <rect class="track" x="0" y="40" width="${width}" height="8"/>${segs}
+    <line x1="0" y1="58" x2="${width}" y2="58" stroke="${C.hair}"/>${legend}</g>`)
 }
 
-/** Tickets opened per day over the last 14 days, as an area line that draws itself. */
-export function trendSvg(all: Ticket[], width = 620): string {
+/** New tickets per day for 14 days: a cyan area line that draws itself, today's count flagged. */
+export function trendSvg(all: Ticket[], width = 380): string {
   const days = [...Array(14)].map((_, i) => new Date(Date.now() - (13 - i) * 86400000).toISOString().slice(0, 10))
-  const perDay = days.map(d => all.filter(t => t.events.some(e => e.kind === 'opened' && e.at.startsWith(d))).length)
-  const max = Math.max(...perDay, 1)
-  const top = 28
-  const h = 70
-  const step = (width - 20) / (days.length - 1)
-  const y = (n: number) => (top + h - (n / max) * h).toFixed(1)
-  const pts = perDay.map((n, i) => `${(10 + i * step).toFixed(1)},${y(n)}`)
-  const dots = perDay.map((n, i) => `<g><title>${days[i]}: ${n} opened</title><circle cx="${(10 + i * step).toFixed(1)}" cy="${y(n)}" r="${n ? 5 : 3}" fill="#6e56cf"/></g>`).join('')
-  const labels = [0, 7, 13].map(i => `<text class="s" x="${(10 + i * step).toFixed(1)}" y="${top + h + 22}" text-anchor="${i === 0 ? 'start' : i === 13 ? 'end' : 'middle'}">${days[i]!.slice(5)}</text>`).join('')
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${top + h + 30}" viewBox="0 0 ${width} ${top + h + 30}"><style>${BIG_CSS}</style>
-    <g class="rise"><text class="t" x="0" y="14">NEW TICKETS, LAST 14 DAYS</text>
-    <polygon points="10,${top + h} ${pts.join(' ')} ${width - 10},${top + h}" fill="#6e56cf" opacity=".14"/>
-    <polyline class="draw" points="${pts.join(' ')}" fill="none" stroke="#6e56cf" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
-    ${dots}${labels}</g></svg>`
-}
-
-/** Stat cards, a stacked bar by source and by owner, and a 14-day "opened" trend. */
-export function dashboardSvg(all: Ticket[], width = 760): string {
-  const live = all.filter(t => t.status !== 'resolved')
-  const open = live.filter(t => t.status === 'open')
-  const cards: [string, number, string, string][] = [
-    ['OPEN', open.length, STATUS.open, `${open.filter(t => t.severity === 'high').length} high`],
-    ['HIGH', open.filter(t => t.severity === 'high').length, SEV.high, 'needs action'],
-    ['ACKNOWLEDGED', live.filter(t => t.status === 'acknowledged').length, STATUS.acknowledged, 'known / owned'],
-    ['FIXED', live.filter(t => t.status === 'fixed').length, STATUS.fixed, 'watching for regressions'],
-  ]
-  const gap = 12
-  const cw = (width - gap * 3) / 4
-  let out = ''
-  cards.forEach(([label, value, color, sub], i) => {
-    const x = i * (cw + gap)
-    const pulse = label === 'HIGH' && value > 0
-      ? `<circle cx="${x + cw - 16}" cy="18" r="5" fill="${color}" class="pulse"/><circle cx="${x + cw - 16}" cy="18" r="5" fill="${color}"/>`
-      : `<circle cx="${x + cw - 16}" cy="18" r="5" fill="${color}"/>`
-    out += `<g class="rise" style="animation-delay:${i * 70}ms"><title>${esc(`${value} ${label.toLowerCase()}: ${sub}`)}</title>
-      <rect class="card" x="${x}" y="0.5" width="${cw}" height="74" rx="10"/>
-      <rect x="${x}" y="0.5" width="4" height="74" rx="2" fill="${color}"/>
-      <text class="t" x="${x + 16}" y="22">${label}</text>${pulse}
-      <text class="v" x="${x + 16}" y="52">${value}</text>
-      <text class="s" x="${x + 16}" y="67">${esc(sub)}</text></g>`
-  })
-
-  const bar = (y: number, title: string, counts: [string, number][]) => {
-    const total = counts.reduce((a, [, n]) => a + n, 0) || 1
-    let x = 0
-    let segs = ''
-    let legend = ''
-    let lx = 0
-    counts.forEach(([name, n], i) => {
-      const w = (n / total) * width
-      const c = PALETTE[i % PALETTE.length]
-      segs += `<rect class="seg grow" style="animation-delay:${200 + i * 60}ms" x="${x}" y="${y + 16}" width="${Math.max(w - 2, 1)}" height="12" rx="3" fill="${c}"><title>${esc(`${name}: ${n}`)}</title></rect>`
-      const label = `${name} ${n}`
-      if (lx + label.length * 6.4 + 22 < width) {
-        legend += `<circle cx="${lx + 5}" cy="${y + 42}" r="4" fill="${c}"/><text class="s" x="${lx + 13}" y="${y + 46}">${esc(label)}</text>`
-        lx += label.length * 6.4 + 26
-      }
-      x += w
-    })
-    return `<g class="rise" style="animation-delay:150ms"><text class="t" x="0" y="${y + 10}">${title}</text>
-      <rect class="track" x="0" y="${y + 16}" width="${width}" height="12" rx="3"/>${segs}${legend}</g>`
-  }
-  const tally = (key: (t: Ticket) => string) =>
-    [...open.reduce((m, t) => m.set(key(t), (m.get(key(t)) ?? 0) + 1), new Map<string, number>())].sort((a, b) => b[1] - a[1])
-  out += bar(92, 'OPEN BY SOURCE', tally(t => t.source))
-  out += bar(150, 'OPEN BY OWNER', tally(t => t.owner ?? 'Unassigned'))
-
-  // tickets opened per day, last 14 days
-  const days = [...Array(14)].map((_, i) => {
-    const d = new Date(Date.now() - (13 - i) * 86400000)
-    return d.toISOString().slice(0, 10)
-  })
-  const perDay = days.map(d => all.filter(t => t.events.some(e => e.kind === 'opened' && e.at.startsWith(d))).length)
-  const max = Math.max(...perDay, 1)
-  const ty = 208
-  const th = 44
+  const per = days.map(d => all.filter(t => t.events.some(e => e.kind === 'opened' && e.at.startsWith(d))).length)
+  const max = Math.max(...per, 1)
+  const top = 30
+  const h = 54
   const step = width / (days.length - 1)
-  const pts = perDay.map((n, i) => `${(i * step).toFixed(1)},${(ty + 18 + th - (n / max) * th).toFixed(1)}`)
-  const dots = perDay.map((n, i) => `<circle cx="${(i * step).toFixed(1)}" cy="${(ty + 18 + th - (n / max) * th).toFixed(1)}" r="3.5" fill="#6e56cf"><title>${days[i]}: ${n} opened</title></circle>`).join('')
-  out += `<g class="rise" style="animation-delay:250ms"><text class="t" x="0" y="${ty + 10}">NEW TICKETS, LAST 14 DAYS</text>
-    <polygon points="0,${ty + 18 + th} ${pts.join(' ')} ${width},${ty + 18 + th}" fill="#6e56cf" opacity=".12"/>
-    <polyline class="draw" points="${pts.join(' ')}" fill="none" stroke="#6e56cf" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>${dots}</g>`
-
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${ty + 18 + th + 6}" viewBox="0 -1 ${width} ${ty + 18 + th + 8}"><style>${BASE_CSS}</style>${out}</svg>`
+  const y = (n: number) => (top + h - (n / max) * h).toFixed(1)
+  const pts = per.map((n, i) => `${(i * step).toFixed(1)},${y(n)}`)
+  const today = per[per.length - 1] ?? 0
+  const avg = per.slice(0, -1).reduce((a, b) => a + b, 0) / 13
+  const flag = today > Math.max(2 * avg, 3) ? `+${today} spike today` : `+${today} today`
+  const ticks = [0, 5, 9, 13].map(i => `<text class="txt" style="font-size:10px" x="${(i * step).toFixed(1)}" y="${top + h + 18}" text-anchor="${i === 0 ? 'start' : i === 13 ? 'end' : 'middle'}" ${i === 13 ? `fill="${C.cyanSoft}"` : ''}>${days[i]!.slice(5)}${i === 13 ? ' (today)' : ''}</text>`).join('')
+  const dots = per.map((n, i) => `<g><title>${days[i]}: ${n} opened</title><circle cx="${(i * step).toFixed(1)}" cy="${y(n)}" r="${i === 13 ? 4 : 2.5}" fill="${C.cyan}"/></g>`).join('')
+  return svg(width, top + h + 24, `<g class="rise">
+    <text class="lbl" x="0" y="12">NEW TICKETS (LAST 14 DAYS)</text>
+    <text class="mono" x="${width}" y="12" text-anchor="end" style="font-size:11px;fill:${today > Math.max(2 * avg, 3) ? C.amberSoft : C.muted}">${flag}</text>
+    <line x1="0" y1="${top + h}" x2="${width}" y2="${top + h}" stroke="${C.hair}"/>
+    <polygon points="0,${top + h} ${pts.join(' ')} ${width},${top + h}" fill="${C.cyan}" fill-opacity=".1"/>
+    <polyline class="draw" points="${pts.join(' ')}" fill="none" stroke="${C.cyan}" stroke-width="2" stroke-linejoin="round"/>
+    ${dots}${ticks}</g>`)
 }
 
-/** A checklist progress bar that animates to its new length. */
-export function progressSvg(done: number, total: number, width = 560): string {
+/** Checklist progress: a thin cyan rule (emerald when complete) with mono "n/m done". */
+export function progressSvg(done: number, total: number, width = 520): string {
   const pct = total ? done / total : 0
-  const color = pct === 1 ? '#30a46c' : '#6e56cf'
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="30" viewBox="0 0 ${width} 30"><style>${BIG_CSS}</style>
-    <rect class="track" x="0" y="8" width="${width - 90}" height="14" rx="7"/>
-    <rect class="grow" x="0" y="8" width="${Math.max((width - 90) * pct, pct ? 14 : 0)}" height="14" rx="7" fill="${color}"/>
-    <text class="s" x="${width - 80}" y="20" style="font-weight:700">${done}/${total} done</text></svg>`
+  const color = pct === 1 ? C.emerald : C.cyan
+  return svg(width, 14, `<rect class="track" x="0" y="4" width="${width}" height="6" rx="1"/>
+    <rect class="grow" x="0" y="4" width="${Math.max(width * pct, pct ? 6 : 0)}" height="6" rx="1" fill="${color}"/>`)
 }
 
-/** The ticket's history as a timeline of dots, newest on the right. */
-export function timelineSvg(t: Ticket, width = 560): string {
-  const ev = t.events.slice(-12)
-  if (!ev.length) return ''
-  const colorOf = (k: string) =>
-    k === 'fixed' || k === 'verified' ? '#30a46c'
-      : k === 'reopened' || k === 'spike' || k === 'verify-failed' ? '#e5484d'
-        : k === 'acknowledged' ? '#3e9bff' : k.startsWith('step') ? '#6e56cf' : '#8b8d98'
-  const step = ev.length > 1 ? (width - 20) / (ev.length - 1) : 0
-  const dots = ev.map((e, i) => {
-    const x = 10 + i * step
-    return `<g class="rise" style="animation-delay:${i * 50}ms"><title>${esc(`${e.at.replace('T', ' ').replace('Z', ' UTC')}\n${e.kind}${e.note ? `: ${e.note}` : ''}`)}</title>
-      <circle cx="${x}" cy="16" r="8" fill="${colorOf(e.kind)}"/>
-      <text class="s" x="${x}" y="44" text-anchor="${i === 0 ? 'start' : i === ev.length - 1 ? 'end' : 'middle'}">${esc(e.kind)}</text></g>`
-  }).join('')
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="52" viewBox="0 0 ${width} 52"><style>${BIG_CSS}</style>
-    <rect class="track" x="10" y="14" width="${width - 20}" height="4" rx="2"/>${dots}</svg>`
-}
-
-/** A small round severity dot that pulses for open high tickets. */
+/** Severity dot with a soft status glow for open high tickets. */
 export function dotSvg(color: string, pulse: boolean): string {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"><style>${BASE_CSS}</style>
-    ${pulse ? `<circle cx="10" cy="10" r="5" fill="${color}" class="pulse"/>` : ''}<circle cx="10" cy="10" r="5" fill="${color}"/></svg>`
+  return svg(14, 14, `${pulse ? `<circle cx="7" cy="7" r="6" fill="${color}" class="glow" opacity=".45"/>` : ''}<circle cx="7" cy="7" r="3.5" fill="${color}"/>`)
 }
