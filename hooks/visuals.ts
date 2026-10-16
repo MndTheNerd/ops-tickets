@@ -124,3 +124,43 @@ export function progressSvg(done: number, total: number, width = 520): string {
 export function dotSvg(color: string, pulse: boolean): string {
   return svg(14, 14, `${pulse ? `<circle cx="7" cy="7" r="6" fill="${color}" class="glow" opacity=".45"/>` : ''}<circle cx="7" cy="7" r="3.5" fill="${color}"/>`)
 }
+
+/** "Incident Command" KPI card: label + status chip on top, big mono value with a caption,
+ *  two right-aligned metric lines, and a footer split by a hairline. */
+export function kpi2Svg(o: {
+  label: string; accent: string; chip: string; chipColor: string; value: string; caption: string; captionColor?: string
+  rightTop: string; rightTopColor?: string; rightSub: string; rightSubColor?: string; footL: string; footR: string; footRColor?: string
+  pulse?: boolean; alert?: boolean; delay?: number
+}): string {
+  const w = 300
+  const h = 124
+  const chipW = o.chip.length * 6.6 + 14
+  const valueW = o.value.length * 18.5
+  return svg(w, h, `<g class="rise" style="animation-delay:${o.delay ?? 0}ms"><title>${esc(`${o.label}: ${o.value} ${o.caption}`)}</title>
+    <rect x=".5" y=".5" width="${w - 1}" height="${h - 1}" rx="10" fill="#0d1527" stroke="${o.alert ? o.accent : C.hair}" stroke-opacity="${o.alert ? 0.45 : 1}"/>
+    ${o.alert ? `<circle cx="${w - 6}" cy="6" r="44" fill="${o.accent}" opacity=".08"/>` : ''}
+    ${o.pulse ? `<circle cx="18" cy="22" r="7" fill="${o.accent}" class="glow" opacity=".45"/>` : ''}
+    <circle cx="18" cy="22" r="4" fill="${o.accent}"/>
+    <text class="lbl" x="30" y="26" style="font-weight:600">${esc(o.label)}</text>
+    <rect x="${w - 14 - chipW}" y="12" width="${chipW}" height="19" rx="4" fill="${o.chipColor}" fill-opacity=".15" stroke="${o.chipColor}" stroke-opacity=".35"/>
+    <text class="mono" x="${w - 14 - chipW / 2}" y="25" text-anchor="middle" style="font-size:10.5px;font-weight:600;fill:${o.chipColor}">${esc(o.chip)}</text>
+    <text class="mono" x="14" y="68" style="font-size:30px;font-weight:800;fill:${o.captionColor && o.value.includes('/') ? o.captionColor : C.strong}">${esc(o.value)}</text>
+    <text class="txt" x="${22 + valueW}" y="67" style="fill:${o.captionColor ?? C.muted}">${esc(o.caption)}</text>
+    <text class="mono" x="${w - 14}" y="56" text-anchor="end" style="font-size:11px;fill:${o.rightTopColor ?? C.text}">${esc(o.rightTop)}</text>
+    <text class="mono" x="${w - 14}" y="71" text-anchor="end" style="font-size:10px;fill:${o.rightSubColor ?? C.ghost}">${esc(o.rightSub)}</text>
+    <line x1="14" y1="88" x2="${w - 14}" y2="88" stroke="${C.hair}"/>
+    <text class="mono" x="14" y="108" style="font-size:11px;fill:${C.muted}">${esc(o.footL)}</text>
+    <text class="mono" x="${w - 14}" y="108" text-anchor="end" style="font-size:11px;fill:${o.footRColor ?? C.cyan}">${esc(o.footR)}</text></g>`)
+}
+
+/** A row's pipeline bar: a thin track filled to `pct` in the state's colour. */
+export function pipeSvg(pct: number, color: string): string {
+  return svg(84, 8, `<rect x="0" y="1" width="84" height="6" rx="3" fill="${C.raised}"/>
+    <rect class="grow" x="0" y="1" width="${Math.max(84 * Math.min(pct, 1), pct ? 6 : 0)}" height="6" rx="3" fill="${color}"/>`)
+}
+
+/** The inspector's top accent: a cyan to emerald gradient rule. */
+export function accentSvg(width = 560): string {
+  return svg(width, 4, `<defs><linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="${C.cyan}"/><stop offset=".5" stop-color="#7dd3fc"/><stop offset="1" stop-color="${C.emerald}"/></linearGradient></defs>
+    <rect x="0" y="0" width="${width}" height="4" fill="url(#g)"/>`)
+}

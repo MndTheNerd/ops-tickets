@@ -54,6 +54,8 @@ declare module 'claude-code' {
       confirming: number | null
       verified: { id: number; ok: boolean; message: string } | null
       exported: string | null
+      pageIndex: number
+      scheduleAt: string | null
       setup: {
         step: number
         configured: boolean
