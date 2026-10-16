@@ -388,12 +388,16 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
-    const Input = 'Input' in els ? els.Input : null
-    const Select = 'Select' in els ? els.Select : null
+    const Input = e.surface !== 'mobile' && 'Input' in els ? els.Input : null
+    const Select = e.surface !== 'mobile' && 'Select' in els ? els.Select : null
     const Markdown = 'Markdown' in els ? els.Markdown : null
     const Code = 'Code' in els ? els.Code : null
+    const Link = 'Link' in els ? els.Link : null
     const isDesktop = e.surface === 'desktop'
-    const Svg = isDesktop && 'Svg' in els ? els.Svg : null
+    const isMobile = e.surface === 'mobile'
+    const Svg = (isDesktop || isMobile) && 'Svg' in els ? els.Svg : null
+    // phones and narrow panes: stacked rows, stacked header, inspector under its row
+    const compact = isMobile || (e.viewport?.columns ?? 160) < 90
     const all = await read($, tickets)
     const view = await read($, statusFilter)          // the preset view: open | high | ack | fixed | all | src:<x> | geo:<x>
     const search = (await read($, sourceFilter)) ?? '' // free-text filter
@@ -456,7 +460,7 @@ export const register: Register = (on, options) => {
     const pg = Math.min(page, pages - 1)
     const pageRows = shown.slice(pg * PER_PAGE, pg * PER_PAGE + PER_PAGE)
     const current = live.find(t => t.id === sel) ?? null
-    const wide = isDesktop && (e.viewport?.columns ?? 160) >= 120
+    const wide = isDesktop && !compact && (e.viewport?.columns ?? 160) >= 120
     const countBy = (key: (t: Ticket) => string | undefined, list: Ticket[]) =>
       [...list.reduce((m, t) => { const v = key(t); return v ? m.set(v, (m.get(v) ?? 0) + 1) : m }, new Map<string, number>())]
         .sort((a, b) => b[1] - a[1])
@@ -491,7 +495,44 @@ export const register: Register = (on, options) => {
             : doneCount(t) >= t.steps.length - 1 ? ['VERIFY', 0.85, C.cyan]
               : ['TRIAGING', doneCount(t) / t.steps.length, C.amberSoft]
 
+    const compactRow = (t: Ticket) => {
+      const isSel = t.id === sel
+      const [plabel, ptone] = PRIORITY[t.severity]
+      const [pstate, ppct, pcolor] = pipeline(t)
+      return (
+        <Box key={`t-${t.id}`} flexDirection="column" gap={0} paddingX={1} paddingY={1}
+          backgroundColor={col(isSel ? '#0e2236' : undefined, isSel ? 'promptBorder' : '')}
+          borderStyle="single" borderColor={col(isSel ? C.cyan : C.hair, isSel ? 'suggestion' : 'promptBorder')}>
+          <Box flexDirection="row" gap={1} flexWrap="wrap">
+            {chip(`pp-${t.id}`, plabel, ptone)}
+            <Text color={col(C.muted, 'subtle')}>{`#INC-${t.id}`}</Text>
+            {t.meta?.code && (
+              <Button key={`code-${t.id}`} plain label={`${t.meta.code_label ?? 'Code'} ${t.meta.code} ⧉`}
+                onPress={() => void copy($, e.surface, `${t.meta?.code_label ?? 'code'} ${t.meta?.code}`, t.meta?.code ?? '')} />
+            )}
+          </Box>
+          <Text bold wrap="wrap" color={col(C.strong, 'text')}>{shortTitle(t).replace(/^(PLU|SKU|Code) \d+ /, '')}</Text>
+          <Box flexDirection="row" gap={1} flexWrap="wrap">
+            {place(t) && chip(`pl-${t.id}`, `▪ ${place(t)}`, 'ghost')}
+            {t.meta?.missing_in && chip(`pm-${t.id}`, t.meta.missing_in, tone(t.meta.missing_in))}
+            {t.reopen_count > 0 && chip(`pr-${t.id}`, `REGRESSION x${t.reopen_count}`, 'rose')}
+          </Box>
+          <Text wrap="wrap" color={col(C.muted, 'subtle')}>{`${t.source} · Owner: ${t.owner ?? 'Unassigned'}`}</Text>
+          <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
+            <Text bold color={col(t.occurrences >= 10 ? C.roseSoft : '#cbd5e1', 'text')}>{`${t.occurrences} hits`}</Text>
+            <Text color={col(C.ghost, 'subtle')}>{`· ${ago(t.last_seen)} ·`}</Text>
+            <Text color={col(pcolor, 'subtle')}>{pstate}</Text>
+            {Svg ? <Svg key={`pipe-${t.id}`} source={pipeSvg(ppct, pcolor)} alt={`${pstate} ${Math.round(ppct * 100)}%`} /> : null}
+            {Link && urlsOf(t)[0] && <Link key={`rowlink-${t.id}`} href={urlsOf(t)[0]!} label="↗ link" />}
+          </Box>
+          <Button key={`pick-${t.id}`} label={isSel ? 'Close' : 'Inspect »'} variant={isSel ? 'primary' : 'secondary'}
+            onPress={() => void update($, selected, v => (v === t.id ? null : t.id))} />
+        </Box>
+      )
+    }
+
     const row = (t: Ticket) => {
+      if (compact) return compactRow(t)
       const isSel = t.id === sel
       const [plabel, ptone] = PRIORITY[t.severity]
       const [pstate, ppct, pcolor] = pipeline(t)
@@ -518,6 +559,7 @@ export const register: Register = (on, options) => {
               <Text color={col(C.ghost, 'subtle')}>·</Text>
               <Text color={col('#cbd5e1', 'text')}>Owner: <Text bold color={col(isSel ? C.cyan : '#cbd5e1', 'text')}>{t.owner ?? 'Unassigned'}</Text></Text>
               {t.reopen_count > 0 && chip(`pr-${t.id}`, `REGRESSION x${t.reopen_count}`, 'rose')}
+              {Link && urlsOf(t)[0] && <Link key={`rowlink-${t.id}`} href={urlsOf(t)[0]!} label={`↗ ${linkLabel(urlsOf(t)[0]!).split('/')[0]}`} />}
             </Box>
           </Box>
           <Box flexDirection="column" alignItems="flex-end" width={10}>
@@ -547,7 +589,7 @@ export const register: Register = (on, options) => {
       return (
         <Box key={`detail-${t.id}`} flexDirection="column" backgroundColor={col('#0d1527', '')}
           borderStyle="single" borderColor={col('#1f4d6b', SEVERITY_COLOR[t.severity])}>
-          {Svg && <Svg key={`accent-${t.id}`} source={accentSvg(600)} alt="" />}
+          {Svg && <Svg key={`accent-${t.id}`} source={accentSvg(compact ? 320 : 600)} alt="" />}
           <Box flexDirection="column" gap={1} paddingX={2} paddingY={1} backgroundColor={col('#101a30', '')}>
             <Box flexDirection="row" justifyContent="space-between" flexWrap="wrap" gap={1}>
               <Box flexDirection="row" gap={1} flexWrap="wrap">
@@ -599,6 +641,17 @@ export const register: Register = (on, options) => {
               ? <Code key={`ev-${t.id}`} source={`${evidence}\n\n${t.detail ?? ''}`} language="json" wrap="wrap" />
               : <Text wrap="wrap">{t.detail ?? ''}</Text>}
             {t.action && <Text wrap="wrap" color={col('#cbd5e1', 'text')}>{t.action}</Text>}
+            {Link && urlsOf(t).length > 0 && (
+              <Box flexDirection="column" gap={0} marginTop={1}>
+                <Text bold color={col(C.muted, 'subtle')}>{`LINKS (${urlsOf(t).length})`}</Text>
+                {urlsOf(t).map((u, i) => (
+                  <Box key={`lnk-${t.id}-${i}`} flexDirection="row" gap={1}>
+                    <Text color={col(C.cyan, 'suggestion')}>↗</Text>
+                    <Link key={`link-${t.id}-${i}`} href={u} label={linkLabel(u)} />
+                  </Box>
+                ))}
+              </Box>
+            )}
           </Box>
 
           <Box flexDirection="column" gap={1} paddingX={2} paddingY={1}>
@@ -715,7 +768,7 @@ export const register: Register = (on, options) => {
             <Text bold color={col('#cbd5e1', 'text')}>INCIDENT &amp; ENTITY RECORD</Text>
             {chip('showing', `Showing ${pageRows.length} of ${shown.length}`, 'ghost')}
           </Box>
-          <Text color={col(C.muted, 'subtle')}>FREQUENCY · PIPELINE · ACTION</Text>
+          {!compact && <Text color={col(C.muted, 'subtle')}>FREQUENCY · PIPELINE · ACTION</Text>}
         </Box>
         {shown.length === 0 && <Box paddingX={1} paddingY={1}><Text color={col(C.emerald, 'success')}>No incidents match this view.</Text></Box>}
         {pageRows.flatMap(t => [row(t), ...(!wide && t.id === sel ? [inspector(t)] : [])])}
@@ -733,7 +786,7 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column" gap={1} padding={1} backgroundColor={col(C.canvas, '')}>
         {/* command header */}
-        <Box flexDirection="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1}
+        <Box flexDirection={compact ? 'column' : 'row'} justifyContent="space-between" alignItems={compact ? 'flex-start' : 'center'} flexWrap="wrap" gap={1}
           paddingX={1} backgroundColor={col('#080d1a', '')} borderStyle="single" borderColor={col(C.hair, 'promptBorder')}>
           <Box flexDirection="row" gap={1} alignItems="center">
             <Text bold backgroundColor={col('#0e2a3b', 'promptBorder')} color={col(C.cyan, 'suggestion')}>{' >_ '}</Text>
@@ -741,8 +794,14 @@ export const register: Register = (on, options) => {
             {chip('core', 'INCIDENT COMMAND', 'cyan')}
             <Text color={col(C.emerald, 'success')}>{`● Synced${lastSeen ? ` ${ago(lastSeen)}` : ''}`}</Text>
           </Box>
+          {!Input && search && (
+            <Box flexDirection="row" gap={1}>
+              <Text color={col(C.muted, 'subtle')}>{`Search: "${search}"`}</Text>
+              <Button key="search-clear" plain label="✕ clear" onPress={() => void update($, sourceFilter, () => '')} />
+            </Box>
+          )}
           {Input && (
-            <Box flexGrow={1} flexShrink={1}>
+            <Box flexGrow={1} flexShrink={1} width={compact ? '100%' : undefined}>
               <Input key="search" label="Search" value={search} placeholder="Filter incidents, code, place, owner (e.g. SKU-123, 520, Downtown)"
                 submitLabel="Search" onInput={(v: string) => void (async () => { await update($, sourceFilter, () => v); await update($, pageIndex, () => 0) })()}
                 onSubmit={(v: string) => void update($, sourceFilter, () => v)} />
@@ -825,6 +884,16 @@ export const register: Register = (on, options) => {
             {viewBtn('fixed', 'Fixed (watching)', fixed.length, 'fixed')}
             {viewBtn('all', 'All', live.length, 'all')}
           </Box>
+          {!Select && (
+            <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
+              <Text color={col(C.muted, 'subtle')}>Owner:</Text>
+              <Button key="f-owner-any" label="Anyone" variant={who ? 'secondary' : 'primary'} onPress={() => void update($, ownerFilter, () => null)} />
+              {[...new Set(live.map(t => t.owner ?? 'Unassigned'))].sort().map(o => (
+                <Button key={`f-owner-${o}`} label={o} variant={who === o ? 'primary' : 'secondary'}
+                  onPress={() => void update($, ownerFilter, v => (v === o ? null : o))} />
+              ))}
+            </Box>
+          )}
           {Select && (
             <Box flexDirection="row" gap={1} alignItems="center">
               <Text color={col(C.muted, 'subtle')}>Owner</Text>
@@ -860,8 +929,8 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: SETUP_PANE }, async ($, e) => {
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
-    const Input = 'Input' in els ? els.Input : null
-    const Select = 'Select' in els ? els.Select : null
+    const Input = e.surface !== 'mobile' && 'Input' in els ? els.Input : null
+    const Select = e.surface !== 'mobile' && 'Select' in els ? els.Select : null
     const Markdown = 'Markdown' in els ? els.Markdown : null
     const isDesktop = e.surface === 'desktop'
     const s = await read($, setup)
@@ -1103,6 +1172,7 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column" gap={1} padding={1} backgroundColor={isDesktop ? C.canvas : undefined}>
         {hd('w-title', 1, 'Set up ops tickets')}
+        {!Input && <Text color="warning" wrap="wrap">Setup needs text fields: run /ops-setup on desktop or in the terminal. Tickets work everywhere once it is set up.</Text>}
         {s.error && <Text color="error" wrap="wrap">{s.error}</Text>}
         <Box flexDirection="row" gap={1} flexWrap="wrap">
           {steps.map((name, i) => (
@@ -1120,6 +1190,27 @@ export const register: Register = (on, options) => {
       </Box>
     )
   })
+}
+
+// Every web address a ticket mentions: its main link first, then any in its text.
+function urlsOf(t: Ticket): string[] {
+  const text = `${t.meta?.url ?? ''}
+${t.detail ?? ''}
+${t.action ?? ''}`
+  const found = text.match(/https?:\/\/[^\s)>\]"'`]+/g) ?? []
+  return [...new Set(found.map(u => u.replace(/[.,;:]+$/, '')))].slice(0, 12)
+}
+
+function linkLabel(url: string): string {
+  try {
+    const u = new URL(url)
+    const host = u.hostname.replace(/^www\./, '')
+    const path = u.pathname.replace(/\/$/, '')
+    const tail = path.length > 42 ? `…${path.slice(-40)}` : path
+    return `${host}${tail}`
+  } catch {
+    return url.slice(0, 60)
+  }
 }
 
 function shortTitle(t: Ticket): string {
