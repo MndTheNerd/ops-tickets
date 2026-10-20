@@ -259,6 +259,7 @@ async function findSlackChannel($: EngineInterface, cfg: Cfg, name: string) {
 // Open or close a ticket and bring the right thing into view: the opened ticket, or on close
 // the row it came from (the state write redraws the pane before the scroll).
 async function inspect($: EngineInterface, id: number) {
+  trace($, `inspect #${id}`)
   const was = await read($, selected)
   const next = was === id ? null : id
   await update($, selected, () => next)
@@ -357,7 +358,21 @@ function listText(list: Ticket[]): string {
   return list.map(t => `#${t.id} [${t.severity}] ${t.title}`).join('\n')
 }
 
+// Scroll trace: a short ring of what moved the tickets pane, written next to the plugin so a
+// scroll bug can be read after the fact (scroll-trace.log in the plugin folder).
+const traceLines: string[] = []
+function trace($: EngineInterface, line: string) {
+  traceLines.push(`${new Date().toISOString().slice(11, 23)} ${line}`)
+  if (traceLines.length > 300) traceLines.shift()
+  void $.fs.write(`${$.plugin.root}/scroll-trace.log`, traceLines.join('\n')).catch(() => undefined)
+}
+
 export const register: Register = (on, options) => {
+  on('ui.scroll', { requestId: PANE }, async ($, e, next) => {
+    trace($, `scroll origin=${e.origin.kind} by=${e.by} offset=${e.offset} body=${e.bodyRows} content=${e.contentRows}`)
+    return next(e)
+  })
+
   const cfg: Cfg = { python: String(options.python ?? 'python') }
 
   on('session.start', async ($, e, next) => {
@@ -434,6 +449,7 @@ export const register: Register = (on, options) => {
     const exportPath = await read($, exported)
     const schedule = await read($, scheduleAt)
     const showAll = await read($, expanded)
+    trace($, `render surface=${e.surface} cols=${e.viewport?.columns} sel=${sel} scroll=${JSON.stringify((e as { scroll?: unknown }).scroll ?? null)}`)
 
     // ---------------------------------------------------------------- palette
     const k = isDesktop ? C : null
@@ -641,7 +657,7 @@ export const register: Register = (on, options) => {
                 {Select ? (
                   <Select key={`owner-${t.id}`} value={t.owner ?? ''}
                     options={[...new Set([...ownerList, ...(t.owner ? [t.owner] : [])])].map(o => ({ value: o, label: o }))}
-                    onSelect={(value: string) => void act($, cfg, 'Saving...', ['owner', String(t.id), value])} />
+                    onSelect={(value: string) => { trace($, `owner select #${t.id} ${t.owner} -> ${value}`); if (value !== (t.owner ?? '')) void act($, cfg, 'Saving...', ['owner', String(t.id), value]) }} />
                 ) : <Text bold>{t.owner ?? 'Unassigned'}</Text>}
               </Box>
             </Box>
