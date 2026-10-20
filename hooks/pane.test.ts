@@ -26,6 +26,7 @@ for (const surface of ['desktop', 'terminal'] as const) {
     })
     on('ui.status', async () => ({ value: undefined }) as never)
     on('ui.open', async () => ({ value: { isPlaced: true } }) as never)
+    on('ui.scroll', async () => ({}) as never) // Inspect / close scroll the pane; the test kit has no layout to scroll
     const notified: string[] = []
     on('ui.notify', async (_$, e) => { notified.push(e.text); return { value: { isSent: true, channel: 'test' } } as never })
     const copied: string[] = []
@@ -124,6 +125,7 @@ for (const [label, surface, viewport] of [
     on('ui.status', async () => ({ value: undefined }) as never)
     on('ui.open', async () => ({ value: { isPlaced: true } }) as never)
     on('ui.notify', async () => ({ value: { isSent: true, channel: 'test' } }) as never)
+    on('ui.scroll', async () => ({}) as never)
 
     await $.command.run({ command: 'tickets', args: '' } as never)
     const ui = await $.ui.mount({ plugin: 'ops-tickets', surface, component: 'Pane', requestId: 'ops-tickets', props: {} as never,

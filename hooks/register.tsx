@@ -18,6 +18,7 @@ const verified = atom({ plugin: 'ops-tickets', key: 'verified' } as const, null)
 const exported = atom({ plugin: 'ops-tickets', key: 'exported' } as const, null)
 const setup = atom({ plugin: 'ops-tickets', key: 'setup' } as const, null)
 const pageIndex = atom({ plugin: 'ops-tickets', key: 'pageIndex' } as const, 0)
+const expanded = atom({ plugin: 'ops-tickets', key: 'expanded' } as const, false)
 const scheduleAt = atom({ plugin: 'ops-tickets', key: 'scheduleAt' } as const, null)
 const SETUP_PANE = 'ops-setup'
 
@@ -255,6 +256,27 @@ async function findSlackChannel($: EngineInterface, cfg: Cfg, name: string) {
   await update($, message, () => `Slack channel #${clean} found (${m[1]}).`)
 }
 
+// Open or close a ticket and bring the right thing into view: the opened ticket, or on close
+// the row it came from (the state write redraws the pane before the scroll).
+async function inspect($: EngineInterface, id: number) {
+  const was = await read($, selected)
+  const next = was === id ? null : id
+  await update($, selected, () => next)
+  await update($, expanded, () => false)
+  try {
+    await $.ui.scroll(next === null
+      ? { to: { key: `t-${id}` }, in: PANE, block: 'nearest' }
+      : { to: { key: `detail-${id}` }, in: PANE, block: 'start' })
+  } catch { /* the surface could not scroll: the ticket is still open */ }
+}
+
+async function closeInspect($: EngineInterface, id: number) {
+  await update($, selected, () => null)
+  try {
+    await $.ui.scroll({ to: { key: `t-${id}` }, in: PANE, block: 'center' })
+  } catch { /* nothing to do */ }
+}
+
 async function askClaude($: EngineInterface, text: string) {
   await $.prompt.submit({ text } as never)
 }
@@ -411,6 +433,7 @@ export const register: Register = (on, options) => {
     const checkResult = await read($, verified)
     const exportPath = await read($, exported)
     const schedule = await read($, scheduleAt)
+    const showAll = await read($, expanded)
 
     // ---------------------------------------------------------------- palette
     const k = isDesktop ? C : null
@@ -526,7 +549,7 @@ export const register: Register = (on, options) => {
             {Link && urlsOf(t)[0] && <Link key={`rowlink-${t.id}`} href={urlsOf(t)[0]!} label="↗ link" />}
           </Box>
           <Button key={`pick-${t.id}`} label={isSel ? 'Close' : 'Inspect »'} variant={isSel ? 'primary' : 'secondary'}
-            onPress={() => void update($, selected, v => (v === t.id ? null : t.id))} />
+            onPress={() => void inspect($, t.id)} />
         </Box>
       )
     }
@@ -572,7 +595,7 @@ export const register: Register = (on, options) => {
               : <Text color="subtle">{`${'█'.repeat(Math.round(ppct * 8))}${'░'.repeat(8 - Math.round(ppct * 8))}`}</Text>}
           </Box>
           <Button key={`pick-${t.id}`} label={isSel ? 'Close' : 'Inspect »'} variant={isSel ? 'primary' : 'secondary'}
-            onPress={() => void update($, selected, v => (v === t.id ? null : t.id))} />
+            onPress={() => void inspect($, t.id)} />
         </Box>
       )
     }
@@ -600,7 +623,7 @@ export const register: Register = (on, options) => {
               </Box>
               <Box flexDirection="row" gap={1}>
                 {t.status === 'open' && chip(`age-${t.id}`, `⏱ OPEN ${dur(ageMin(t.first_seen))}`, t.severity === 'high' ? 'rose' : 'amber')}
-                <Button key="close-detail" plain label="✕" onPress={() => void update($, selected, () => null)} />
+                <Button key="close-detail" plain label="✕" onPress={() => void closeInspect($, t.id)} />
               </Box>
             </Box>
             {heading(`dt-${t.id}`, 2, shortTitle(t))}
@@ -637,9 +660,22 @@ export const register: Register = (on, options) => {
               </Box>
             </Box>
             {t.detail && <Text wrap="wrap" color={col(C.roseSoft, 'error')}>{`[${(t.meta?.missing_in ?? t.severity).toUpperCase()}] ${t.detail.split('\n')[0]}`}</Text>}
-            {Code && isDesktop
-              ? <Code key={`ev-${t.id}`} source={`${evidence}\n\n${t.detail ?? ''}`} language="json" wrap="wrap" />
-              : <Text wrap="wrap">{t.detail ?? ''}</Text>}
+            {(() => {
+              const full = Code && isDesktop ? `${evidence}\n\n${t.detail ?? ''}` : t.detail ?? ''
+              const lines = full.split('\n')
+              const shownText = showAll || lines.length <= 14 ? full : `${lines.slice(0, 14).join('\n')}\n…`
+              return (
+                <Box flexDirection="column">
+                  {Code && isDesktop
+                    ? <Code key={`ev-${t.id}`} source={shownText} language="json" wrap="wrap" />
+                    : <Text wrap="wrap">{shownText}</Text>}
+                  {lines.length > 14 && (
+                    <Button key={`ev-more-${t.id}`} plain label={showAll ? '▴ Show less' : `▾ Show full evidence (${lines.length} lines)`}
+                      onPress={() => void update($, expanded, v => !v)} />
+                  )}
+                </Box>
+              )
+            })()}
             {t.action && <Text wrap="wrap" color={col('#cbd5e1', 'text')}>{t.action}</Text>}
             {Link && urlsOf(t).length > 0 && (
               <Box flexDirection="column" gap={0} marginTop={1}>
