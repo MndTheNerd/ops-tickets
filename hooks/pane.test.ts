@@ -44,6 +44,18 @@ for (const surface of ['desktop', 'terminal'] as const) {
     if (surface === 'desktop') expect((await ui.findAll({ type: 'Svg' })).length).toBeGreaterThanOrEqual(6) // 4 KPIs + pipelines
     else expect(await ui.find({ text: /1 P0/ })).toBeDefined()
 
+    // KPI cards and integration chips open their views
+    if (surface === 'desktop') {
+      await ui.press({ key: 'k-codes-view' })
+      expect(await ui.find({ text: /Otherland · Northgate/ })).toBeUndefined() // only the coded incident
+      expect(await ui.find({ text: /Exampleland · Harbour/ })).toBeDefined()
+      await ui.press({ key: 'k-active-view' })
+      expect(await ui.find({ text: /Otherland · Northgate/ })).toBeDefined()
+    }
+    await ui.press({ key: 'hs-Shop checks' })
+    expect(await ui.find({ text: /Exampleland · Harbour/ })).toBeDefined()
+    await ui.press({ key: 'v-open' })
+
     // preset view: P0 blockers only
     await ui.press({ key: 'v-high' })
     expect(await ui.find({ text: /Otherland · Northgate/ })).toBeUndefined()

@@ -264,18 +264,18 @@ async function inspect($: EngineInterface, id: number) {
   const next = was === id ? null : id
   await update($, selected, () => next)
   await update($, expanded, () => false)
-  try {
-    await $.ui.scroll(next === null
-      ? { to: { key: `t-${id}` }, in: PANE, block: 'nearest' }
-      : { to: { key: `detail-${id}` }, in: PANE, block: 'start' })
-  } catch { /* the surface could not scroll: the ticket is still open */ }
+}
+
+// Switch the list to a preset view from anywhere (KPI cards, integration chips, view buttons).
+async function showView($: EngineInterface, value: string) {
+  await update($, statusFilter, () => value)
+  await update($, pageIndex, () => 0)
+  await update($, selected, () => null)
 }
 
 async function closeInspect($: EngineInterface, id: number) {
+  trace($, `close #${id}`)
   await update($, selected, () => null)
-  try {
-    await $.ui.scroll({ to: { key: `t-${id}` }, in: PANE, block: 'center' })
-  } catch { /* nothing to do */ }
 }
 
 async function askClaude($: EngineInterface, text: string) {
@@ -361,15 +361,44 @@ function listText(list: Ticket[]): string {
 // Scroll trace: a short ring of what moved the tickets pane, written next to the plugin so a
 // scroll bug can be read after the fact (scroll-trace.log in the plugin folder).
 const traceLines: string[] = []
+let traceDue = 0
 function trace($: EngineInterface, line: string) {
   traceLines.push(`${new Date().toISOString().slice(11, 23)} ${line}`)
   if (traceLines.length > 300) traceLines.shift()
-  void $.fs.write(`${$.plugin.root}/scroll-trace.log`, traceLines.join('\n')).catch(() => undefined)
+  if (traceDue) return // one write a second at most: a slow draw makes wheel ticks pile up
+  traceDue = 1
+  void $.clock.sleep(1000).then(() => {
+    traceDue = 0
+    return $.fs.write(`${$.plugin.root}/scroll-trace.log`, traceLines.join('\n'))
+  }).catch(() => { traceDue = 0 })
 }
+
+// The desktop pane pulls its window back toward the end after the person scrolls up near it
+// (seen as +1..+3 moves landing between their -1 wheel ticks, and one jump to the end after a
+// ticket opens). Hold the window where the person last put it: a downward move right after an
+// upward one, or a single jump longer than a page, keeps the person's offset.
+let lastUp = { at: 0, offset: 0 }
 
 export const register: Register = (on, options) => {
   on('ui.scroll', { requestId: PANE }, async ($, e, next) => {
-    trace($, `scroll origin=${e.origin.kind} by=${e.by} offset=${e.offset} body=${e.bodyRows} content=${e.contentRows}`)
+    const now = Date.now()
+    const tag = `scroll origin=${e.origin.kind} by=${e.by} offset=${e.offset} body=${e.bodyRows} content=${e.contentRows} ptr=${e.pointer ? `${e.pointer.row}` : '-'}`
+    if (e.origin.kind !== 'person') { trace($, tag); return next(e) }
+    if (e.by < 0) {
+      lastUp = { at: now, offset: e.offset }
+      trace($, tag)
+      return next(e)
+    }
+    if (e.by > 0 && now - lastUp.at < 400) {
+      trace($, `${tag} HELD at ${lastUp.offset}`)
+      return next({ ...e, offset: lastUp.offset })
+    }
+    if (e.by > e.bodyRows && !e.pointer) {
+      const offset = e.offset - e.by + e.bodyRows
+      trace($, `${tag} CAPPED to ${offset}`)
+      return next({ ...e, offset })
+    }
+    trace($, tag)
     return next(e)
   })
 
@@ -449,7 +478,6 @@ export const register: Register = (on, options) => {
     const exportPath = await read($, exported)
     const schedule = await read($, scheduleAt)
     const showAll = await read($, expanded)
-    trace($, `render surface=${e.surface} cols=${e.viewport?.columns} sel=${sel} scroll=${JSON.stringify((e as { scroll?: unknown }).scroll ?? null)}`)
 
     // ---------------------------------------------------------------- palette
     const k = isDesktop ? C : null
@@ -486,6 +514,8 @@ export const register: Register = (on, options) => {
         : view === 'high' ? t.status === 'open' && t.severity === 'high'
           : view === 'ack' ? t.status === 'acknowledged'
             : view === 'fixed' ? t.status === 'fixed'
+              : view === 'code' ? t.status === 'open' && !!t.meta?.code
+                : view === 'regress' ? t.status !== 'resolved' && t.reopen_count > 0
               : view.startsWith('src:') ? t.status !== 'resolved' && t.source === view.slice(4)
                 : view.startsWith('geo:') ? t.status !== 'resolved' && t.meta?.country === view.slice(4)
                   : t.status !== 'resolved'
@@ -810,7 +840,7 @@ export const register: Register = (on, options) => {
 
     const viewBtn = (key: string, label: string, n: number, value: string, dot?: string) => (
       <Button key={`v-${key}`} label={`${dot ? `${dot} ` : ''}${label}  ${n}`} variant={view === value ? 'primary' : 'secondary'}
-        onPress={() => void (async () => { await update($, statusFilter, () => value); await update($, pageIndex, () => 0) })()} />
+        onPress={() => void showView($, value)} />
     )
 
     const table = (
@@ -876,10 +906,10 @@ export const register: Register = (on, options) => {
             {[...new Set(live.map(t => t.source))].sort().map(s => {
               const hs = health(s)
               const n = open.filter(t => t.source === s).length
-              return <Text key={`hs-${s}`} backgroundColor={col(hs === 'emerald' ? '#0f1d2c' : TINT[hs]![0], 'promptBorder')}
+              return <Button key={`hs-${s}`} plain onPress={() => void showView($, `src:${s}`)}><Text backgroundColor={col(hs === 'emerald' ? '#0f1d2c' : TINT[hs]![0], 'promptBorder')}
                 color={col(hs === 'emerald' ? '#cbd5e1' : TINT[hs]![1], 'text')}>
                 <Text color={col(hs === 'rose' ? C.rose : hs === 'amber' ? C.amber : C.emerald, 'text')}>{' ● '}</Text>{`${s}: ${n ? `${n} open${hs === 'rose' ? ' (critical)' : ' (degraded)'}` : 'OK'} `}
-              </Text>
+              </Text></Button>
             })}
           </Box>
           <Text color={col(C.cyan, 'suggestion')}>{`⏲ Next automated run: ${schedule ?? 'not scheduled'}`}</Text>
@@ -888,17 +918,24 @@ export const register: Register = (on, options) => {
         {/* KPI cards */}
         {Svg && all.length > 0 && (
           <Box flexDirection="row" gap={1} flexWrap="wrap">
-            <Svg key="k-active" isInteractive alt={`${open.length} active incidents`} source={kpi2Svg({
+            <Box key="k-active-card" flexDirection="column" gap={0}>
+              <Svg key="k-active" isInteractive alt={`${open.length} active incidents`} source={kpi2Svg({
               label: 'ACTIVE INCIDENTS', accent: C.rose, chip: `${high.length} P0 HIGH`, chipColor: C.rose, alert: high.length > 0, pulse: high.length > 0,
               value: String(open.length), caption: 'in queue', rightTop: high.length ? `⏱ oldest P0: ${dur(oldestHigh)}` : 'No P0 open',
               rightTopColor: high.length ? C.roseSoft : C.emerald, rightSub: `${regressions} regression(s)`,
               footL: `New in 24h: +${newDay}`, footR: sourcesOpen[0] ? `Most: ${sourcesOpen[0][0]}` : '', footRColor: C.amberSoft, delay: 0 })} />
-            <Svg key="k-mttr" isInteractive alt="mean time to resolve" source={kpi2Svg({
+              <Button key="k-active-view" plain label={`View ${open.length} active incidents ›`} onPress={() => void showView($, 'open')} />
+            </Box>
+            <Box key="k-mttr-card" flexDirection="column" gap={0}>
+              <Svg key="k-mttr" isInteractive alt="mean time to resolve" source={kpi2Svg({
               label: 'MTTR (TRAILING 7D)', accent: C.cyan, chip: `${fixed7.length} resolved`, chipColor: C.emerald,
               value: mttr === null ? '–' : dur(mttr), caption: '', rightTop: `Fixed today: ${fixedToday}`,
               rightSub: `${verifiedToday} verified today`, rightSubColor: C.emerald,
               footL: `Acknowledged: ${live.filter(t => t.status === 'acknowledged').length}`, footR: `Owners: ${new Set(open.map(t => t.owner)).size}`, delay: 70 })} />
-            <Svg key="k-codes" isInteractive alt={`${codeOpen.length} ${codeLabel} issues`} source={kpi2Svg(codeOpen.length ? {
+              <Button key="k-mttr-view" plain label={`View ${fixed.length} fixed (watching) ›`} onPress={() => void showView($, 'fixed')} />
+            </Box>
+            <Box key="k-codes-card" flexDirection="column" gap={0}>
+              <Svg key="k-codes" isInteractive alt={`${codeOpen.length} ${codeLabel} issues`} source={kpi2Svg(codeOpen.length ? {
               label: `${codeLabel.toUpperCase()} INTEGRITY`, accent: C.emerald, chip: `${codeOpen.length} unresolved`, chipColor: C.cyan,
               value: String(codeOpen.length), caption: `${codeLabel} diffs`, captionColor: C.roseSoft,
               rightTop: `Scope: ${codePlaces} places`, rightSub: codeCountries,
@@ -907,12 +944,17 @@ export const register: Register = (on, options) => {
               value: String(new Set(open.map(t => t.meta?.store).filter(Boolean)).size), caption: 'places',
               rightTop: `${countries.length} countries`, rightSub: countries.slice(0, 3).map(([c]) => c).join(' · '),
               footL: topProblem ? `Top: ${topProblem[0]}` : '', footR: '', delay: 140 })} />
-            <Svg key="k-watch" isInteractive alt={`${fixed.length} fixed and watched`} source={kpi2Svg({
+              <Button key="k-codes-view" plain label={codeOpen.length ? `View ${codeOpen.length} ${codeLabel} issues ›` : 'View all places ›'} onPress={() => void showView($, codeOpen.length ? 'code' : 'all')} />
+            </Box>
+            <Box key="k-watch-card" flexDirection="column" gap={0}>
+              <Svg key="k-watch" isInteractive alt={`${fixed.length} fixed and watched`} source={kpi2Svg({
               label: 'REGRESSION WATCH', accent: C.emerald, chip: regressions ? 'Regressing' : 'Active', chipColor: regressions ? C.rose : C.emerald,
               value: `${Math.max(fixed.length - regressions, 0)} / ${fixed.length}`, caption: 'stable', captionColor: C.emerald,
               rightTop: `${regressions} regressions`, rightTopColor: regressions ? C.roseSoft : '#cbd5e1',
               rightSub: regressions ? 'reopened after fix' : 'all fixes holding', rightSubColor: regressions ? C.roseSoft : C.emerald,
               footL: `Verified today: ${verifiedToday}`, footR: 'Audit trail ›', delay: 210 })} />
+              <Button key="k-watch-view" plain label={regressions ? `View ${regressions} regressions ›` : `View ${fixed.length} watched fixes ›`} onPress={() => void showView($, regressions ? 'regress' : 'fixed')} />
+            </Box>
           </Box>
         )}
         {!isDesktop && (
@@ -935,6 +977,8 @@ export const register: Register = (on, options) => {
             {viewBtn('ack', 'Acknowledged', live.filter(t => t.status === 'acknowledged').length, 'ack')}
             {viewBtn('fixed', 'Fixed (watching)', fixed.length, 'fixed')}
             {viewBtn('all', 'All', live.length, 'all')}
+            {view === 'code' && viewBtn('code', `${codeLabel} issues`, codeOpen.length, 'code')}
+            {view === 'regress' && viewBtn('regress', 'Regressions', regressions, 'regress')}
           </Box>
           {!Select && (
             <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
