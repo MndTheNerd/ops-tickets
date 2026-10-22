@@ -389,6 +389,13 @@ export const register: Register = (on, options) => {
       trace($, tag)
       return next(e)
     }
+    // a jump that lands on the end soon after the person scrolled up is the pane pulling itself
+    // down, not the wheel (wheel ticks move 1-3 rows)
+    const atEnd = e.offset >= e.contentRows - e.bodyRows - 2
+    if (e.by > 3 && atEnd && now - lastUp.at < 3000) {
+      trace($, `${tag} HELD at ${lastUp.offset} (end pull)`)
+      return next({ ...e, offset: lastUp.offset })
+    }
     if (e.by > 0 && now - lastUp.at < 400) {
       trace($, `${tag} HELD at ${lastUp.offset}`)
       return next({ ...e, offset: lastUp.offset })
@@ -672,7 +679,7 @@ export const register: Register = (on, options) => {
                 <Button key="close-detail" plain label="✕" onPress={() => void closeInspect($, t.id)} />
               </Box>
             </Box>
-            {heading(`dt-${t.id}`, 2, shortTitle(t))}
+            <Text key={`dt-${t.id}`} bold color={col('#f1f5f9', 'text')}>{shortTitle(t)}</Text>
             <Box flexDirection="row" gap={1} flexWrap="wrap">
               <Box flexDirection="column" paddingX={1} flexGrow={1} backgroundColor={col('#080d1a', '')} borderStyle="single" borderColor={col(C.hair, 'promptBorder')}>
                 <Text color={col(C.ghost, 'subtle')}>IMPACTED PLACE</Text>
@@ -707,14 +714,15 @@ export const register: Register = (on, options) => {
             </Box>
             {t.detail && <Text wrap="wrap" color={col(C.roseSoft, 'error')}>{`[${(t.meta?.missing_in ?? t.severity).toUpperCase()}] ${t.detail.split('\n')[0]}`}</Text>}
             {(() => {
-              const full = Code && isDesktop ? `${evidence}\n\n${t.detail ?? ''}` : t.detail ?? ''
+              const full = isDesktop ? `${evidence}\n\n${t.detail ?? ''}` : t.detail ?? ''
               const lines = full.split('\n')
               const shownText = showAll || lines.length <= 14 ? full : `${lines.slice(0, 14).join('\n')}\n…`
               return (
                 <Box flexDirection="column">
-                  {Code && isDesktop
-                    ? <Code key={`ev-${t.id}`} source={shownText} language="json" wrap="wrap" />
-                    : <Text wrap="wrap">{shownText}</Text>}
+                  {/* plain text, not Code: the desktop code viewer pulled the pane to its end */}
+                  <Box paddingX={1} backgroundColor={col('#080d1a', '')}>
+                    <Text wrap="wrap" color={col('#cbd5e1', 'text')}>{shownText}</Text>
+                  </Box>
                   {lines.length > 14 && (
                     <Button key={`ev-more-${t.id}`} plain label={showAll ? '▴ Show less' : `▾ Show full evidence (${lines.length} lines)`}
                       onPress={() => void update($, expanded, v => !v)} />
