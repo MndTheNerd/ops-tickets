@@ -391,15 +391,15 @@ export const register: Register = (on, options) => {
     trace($, `scroll origin=${e.origin.kind} by=${e.by} offset=${e.offset} body=${e.bodyRows} content=${e.contentRows}`)
     // calibrate the estimate from what was really drawn: trim when taller than the pane,
     // add rows when a lot of the pane is left empty (0.3.10 drew 29 of 45 rows)
-    const spare = e.bodyRows - e.contentRows
+    const excess = e.contentRows - e.bodyRows // the 6-row spacer should be most of it
     const more = listWindow.fit < listWindow.total
-    if (spare < 0 && listWindow.fit > 2 && fitAdjust < 8) {
-      fitAdjust += Math.max(1, Math.ceil(-spare / 4))
-      trace($, `  overflow ${-spare} rows: fitAdjust=${fitAdjust}`)
+    if (excess > 12 && listWindow.fit > 2 && fitAdjust < 12) {
+      fitAdjust += Math.max(1, Math.ceil((excess - 8) / 4))
+      trace($, `  excess ${excess} rows: fitAdjust=${fitAdjust}`)
       $.ui.invalidate('ui.render')
-    } else if (spare >= 5 && more && fitAdjust > -12) {
-      fitAdjust -= Math.floor((spare - 1) / 4)
-      trace($, `  ${spare} rows free: fitAdjust=${fitAdjust}`)
+    } else if (excess < 4 && more && fitAdjust > -12) {
+      fitAdjust -= Math.max(1, Math.floor((8 - excess) / 4))
+      trace($, `  excess ${excess} rows: fitAdjust=${fitAdjust}`)
       $.ui.invalidate('ui.render')
     }
     if (e.origin.kind !== 'person') return {}
@@ -552,7 +552,9 @@ export const register: Register = (on, options) => {
     const bodyRows = Math.max(16, (e.viewport?.rows ?? 48) - 1)
     const ROW_H = compact ? 6 : 4
     const scrolledDown = isDesktop && (page > 0 || all.some(t => t.id === sel))
-    const TOP_H = scrolledDown ? 4 : Svg ? 26 : compact ? 22 : 18
+    // four KPI cards side by side: stacked, they made the header ~90 rows on a 106-column pane
+    const cardW = Math.max(140, Math.min(300, Math.floor(((e.viewport?.columns ?? 120) * 8 - 48) / 4)))
+    const TOP_H = scrolledDown ? 4 : Svg ? 22 : compact ? 22 : 18
     const windowed = isDesktop // only the desktop pane pinned itself to its end
     const fit = windowed ? Math.max(2, Math.floor((bodyRows - TOP_H - 7) / ROW_H) - fitAdjust) : Math.max(1, shown.length)
     const start = Math.max(0, Math.min(page, shown.length - fit))
@@ -973,7 +975,7 @@ export const register: Register = (on, options) => {
         {Svg && all.length > 0 && (
           <Box flexDirection="row" gap={1} flexWrap="wrap">
             <Box key="k-active-card" flexDirection="column" gap={0}>
-              <Svg key="k-active" isInteractive alt={`${open.length} active incidents`} source={kpi2Svg({
+              <Svg key="k-active" isInteractive width={cardW} alt={`${open.length} active incidents`} source={kpi2Svg({
               label: 'ACTIVE INCIDENTS', accent: C.rose, chip: `${high.length} P0 HIGH`, chipColor: C.rose, alert: high.length > 0, pulse: high.length > 0,
               value: String(open.length), caption: 'in queue', rightTop: high.length ? `⏱ oldest P0: ${dur(oldestHigh)}` : 'No P0 open',
               rightTopColor: high.length ? C.roseSoft : C.emerald, rightSub: `${regressions} regression(s)`,
@@ -981,7 +983,7 @@ export const register: Register = (on, options) => {
               <Button key="k-active-view" plain label={`View ${open.length} active incidents ›`} onPress={() => void showView($, 'open')} />
             </Box>
             <Box key="k-mttr-card" flexDirection="column" gap={0}>
-              <Svg key="k-mttr" isInteractive alt="mean time to resolve" source={kpi2Svg({
+              <Svg key="k-mttr" isInteractive width={cardW} alt="mean time to resolve" source={kpi2Svg({
               label: 'MTTR (TRAILING 7D)', accent: C.cyan, chip: `${fixed7.length} resolved`, chipColor: C.emerald,
               value: mttr === null ? '–' : dur(mttr), caption: '', rightTop: `Fixed today: ${fixedToday}`,
               rightSub: `${verifiedToday} verified today`, rightSubColor: C.emerald,
@@ -989,7 +991,7 @@ export const register: Register = (on, options) => {
               <Button key="k-mttr-view" plain label={`View ${done.length} completed ›`} onPress={() => void showView($, 'done')} />
             </Box>
             <Box key="k-codes-card" flexDirection="column" gap={0}>
-              <Svg key="k-codes" isInteractive alt={`${codeOpen.length} ${codeLabel} issues`} source={kpi2Svg(codeOpen.length ? {
+              <Svg key="k-codes" isInteractive width={cardW} alt={`${codeOpen.length} ${codeLabel} issues`} source={kpi2Svg(codeOpen.length ? {
               label: `${codeLabel.toUpperCase()} INTEGRITY`, accent: C.emerald, chip: `${codeOpen.length} unresolved`, chipColor: C.cyan,
               value: String(codeOpen.length), caption: `${codeLabel} diffs`, captionColor: C.roseSoft,
               rightTop: `Scope: ${codePlaces} places`, rightSub: codeCountries,
@@ -1001,7 +1003,7 @@ export const register: Register = (on, options) => {
               <Button key="k-codes-view" plain label={codeOpen.length ? `View ${codeOpen.length} ${codeLabel} issues ›` : 'View all places ›'} onPress={() => void showView($, codeOpen.length ? 'code' : 'all')} />
             </Box>
             <Box key="k-watch-card" flexDirection="column" gap={0}>
-              <Svg key="k-watch" isInteractive alt={`${fixed.length} fixed and watched`} source={kpi2Svg({
+              <Svg key="k-watch" isInteractive width={cardW} alt={`${fixed.length} fixed and watched`} source={kpi2Svg({
               label: 'REGRESSION WATCH', accent: C.emerald, chip: regressions ? 'Regressing' : 'Active', chipColor: regressions ? C.rose : C.emerald,
               value: `${Math.max(fixed.length - regressions, 0)} / ${fixed.length}`, caption: 'stable', captionColor: C.emerald,
               rightTop: `${regressions} regressions`, rightTopColor: regressions ? C.roseSoft : '#cbd5e1',
@@ -1074,6 +1076,13 @@ export const register: Register = (on, options) => {
         {isDesktop && current ? (
           <Box key="detail-view" flexDirection="column">{inspector(current)}</Box>
         ) : table}
+        {windowed && !current && (
+          // a few blank rows below the fold: wheel events only reach the plugin while the pane
+          // has something to scroll, and the hook keeps the pane itself at the top
+          <Box key="wheel-spacer" flexDirection="column">
+            {[0, 1, 2, 3, 4, 5].map(i => <Text key={`sp-${i}`}> </Text>)}
+          </Box>
+        )}
       </Box>
     )
   })
