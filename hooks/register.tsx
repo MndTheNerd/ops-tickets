@@ -261,19 +261,18 @@ async function findSlackChannel($: EngineInterface, cfg: Cfg, name: string) {
 // Open or close a ticket and bring the right thing into view: the opened ticket, or on close
 // the row it came from (the state write redraws the pane before the scroll).
 async function inspect($: EngineInterface, id: number) {
-  trace($, `inspect #${id}`)
   await update($, selected, () => id)
   await update($, expanded, () => false)
   await seatFocus($, 'back-list') // the ticket view starts with its back button
 }
 
-// After a press redraws the pane, put the ring on a button near the top of what is now drawn,
-// so the pane does not keep a far-away element in view.
+// After a press redraws the pane, put the focus ring on a button near the top of what is drawn:
+// the desktop pane keeps its focused element in view, and a ring left behind on a redrawn button
+// pinned the window to the end (diagnosed with a scroll trace in 0.3.3-0.3.13).
 async function seatFocus($: EngineInterface, key: string) {
   try {
-    const r = await $.ui.focus({ requestId: PANE, key })
-    trace($, `seat focus ${key}: ${JSON.stringify(r)}`)
-  } catch (err) { trace($, `seat focus ${key} failed: ${String(err)}`) }
+    await $.ui.focus({ requestId: PANE, key })
+  } catch { /* the pane is not holding the keys: nothing to re-seat */ }
 }
 
 // Switch the list to a preset view from anywhere (KPI cards, integration chips, view buttons).
@@ -284,7 +283,6 @@ async function showView($: EngineInterface, value: string) {
 }
 
 async function closeInspect($: EngineInterface, id: number) {
-  trace($, `close #${id}`)
   await update($, selected, () => null)
   await seatFocus($, `pick-${id}`)
 }
@@ -369,37 +367,8 @@ function listText(list: Ticket[]): string {
   return list.map(t => `#${t.id} [${t.severity}] ${t.title}`).join('\n')
 }
 
-// Scroll trace: a short ring of what moved the tickets pane, written next to the plugin so a
-// scroll bug can be read after the fact (scroll-trace.log in the plugin folder).
-const traceLines: string[] = []
-let traceDue = 0
-function trace($: EngineInterface, line: string) {
-  traceLines.push(`${new Date().toISOString().slice(11, 23)} ${line}`)
-  if (traceLines.length > 300) traceLines.shift()
-  if (traceDue) return // one write a second at most: a slow draw makes wheel ticks pile up
-  traceDue = 1
-  void $.clock.sleep(1000).then(() => {
-    traceDue = 0
-    return $.fs.write(`${$.plugin.root}/scroll-trace.log`, traceLines.join('\n'))
-  }).catch(() => { traceDue = 0 })
-}
-
 
 export const register: Register = (on, options) => {
-  on('ui.scroll', { requestId: DETAIL_PANE }, async ($, e, next) => {
-    trace($, `detail scroll origin=${e.origin.kind} by=${e.by} offset=${e.offset} body=${e.bodyRows} content=${e.contentRows}`)
-    return next(e)
-  })
-  on('ui.scroll', { requestId: PANE }, async ($, e, next) => {
-    trace($, `scroll origin=${e.origin.kind} by=${e.by} offset=${e.offset} body=${e.bodyRows} content=${e.contentRows}`)
-    return next(e)
-  })
-  // where the focus ring goes: a pane keeps its focused element in view, so a ring left on the
-  // last button would hold the window at the end
-  on('ui.focus', { requestId: PANE }, async ($, e, next) => {
-    trace($, `focus ${e.origin.kind} -> ${e.element ?? '(engine stop)'}`)
-    return next(e)
-  })
 
   const cfg: Cfg = { python: String(options.python ?? 'python') }
 
@@ -696,7 +665,7 @@ export const register: Register = (on, options) => {
                 {Select ? (
                   <Select key={`owner-${t.id}`} value={t.owner ?? ''}
                     options={[...new Set([...ownerList, ...(t.owner ? [t.owner] : [])])].map(o => ({ value: o, label: o }))}
-                    onSelect={(value: string) => { trace($, `owner select #${t.id} ${t.owner} -> ${value}`); if (value !== (t.owner ?? '')) void act($, cfg, 'Saving...', ['owner', String(t.id), value]) }} />
+                    onSelect={(value: string) => { if (value !== (t.owner ?? '')) void act($, cfg, 'Saving...', ['owner', String(t.id), value]) }} />
                 ) : <Text bold>{t.owner ?? 'Unassigned'}</Text>}
               </Box>
             </Box>
