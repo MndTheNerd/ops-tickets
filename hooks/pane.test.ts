@@ -104,8 +104,7 @@ for (const surface of ['desktop', 'terminal'] as const) {
       for (const c of node.children ?? []) keysOf(c, acc)
       return acc
     }
-    expect(keysOf(await ui.drawn())).not.toContain('detail-4')
-    const dui = await $.ui.mount({ plugin: 'ops-tickets', surface, component: 'Pane', requestId: 'ops-ticket', props: {} as never })
+    const dui = ui // the ticket opens in the same pane: in place of the list on desktop, under its row elsewhere
     expect(await dui.find({ text: /RUNBOOK PIPELINE/ })).toBeDefined()
     expect(await dui.find({ text: /Step 1 of 2/ })).toBeDefined()
     expect(keysOf(await dui.drawn())).toContain('detail-4')
@@ -118,8 +117,10 @@ for (const surface of ['desktop', 'terminal'] as const) {
 
     await dui.press({ key: 'copy-ticket-4' })
     expect(copied.at(-1)).toContain('SKU: 90001')
+    if (surface === 'desktop') await ui.press({ key: 'back-list' }) // on desktop the ticket replaces the list
     await ui.press({ key: 'code-4' })
     expect(copied.at(-1)).toBe('90001')
+    if (surface === 'desktop') await ui.press({ key: 'pick-4' })
 
     await dui.press({ key: 'step-do-4-0' })
     expect(calls.some(a => a.includes('step') && a.includes('4') && a.includes('0'))).toBe(true)
@@ -163,8 +164,7 @@ for (const [label, surface, viewport] of [
     expect(await ui.find({ text: /FREQUENCY · PIPELINE · ACTION/ })).toBeUndefined() // no wide column header
 
     await ui.press({ key: 'pick-4' })
-    const dui = await $.ui.mount({ plugin: 'ops-tickets', surface, component: 'Pane', requestId: 'ops-ticket', props: {} as never,
-      ...(viewport ? { viewport } : {}) } as never)
+    const dui = ui
     expect(await dui.find({ key: 'detail-4' })).toBeDefined()
 
     await dui.press({ key: 'ask-fix-4' })

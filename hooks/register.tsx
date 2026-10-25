@@ -21,7 +21,7 @@ const pageIndex = atom({ plugin: 'ops-tickets', key: 'pageIndex' } as const, 0)
 const expanded = atom({ plugin: 'ops-tickets', key: 'expanded' } as const, false)
 const scheduleAt = atom({ plugin: 'ops-tickets', key: 'scheduleAt' } as const, null)
 const SETUP_PANE = 'ops-setup'
-// a ticket opens in a pane of its own: growing the list pane made the desktop pull it to its end
+// the desktop app never showed a second pane (0.3.7-0.3.8): kept only so an old id still draws
 const DETAIL_PANE = 'ops-ticket'
 
 const SEVERITY_COLOR = { high: 'error', medium: 'warning', low: 'subtle' } as const
@@ -264,7 +264,6 @@ async function inspect($: EngineInterface, id: number) {
   trace($, `inspect #${id}`)
   await update($, selected, () => id)
   await update($, expanded, () => false)
-  await $.ui.open({ id: DETAIL_PANE, title: `INC-${id}` })
 }
 
 // Switch the list to a preset view from anywhere (KPI cards, integration chips, view buttons).
@@ -277,7 +276,6 @@ async function showView($: EngineInterface, value: string) {
 async function closeInspect($: EngineInterface, id: number) {
   trace($, `close #${id}`)
   await update($, selected, () => null)
-  try { await $.ui.close({ id: DETAIL_PANE }) } catch { /* already closed */ }
 }
 
 async function askClaude($: EngineInterface, text: string) {
@@ -452,8 +450,8 @@ export const register: Register = (on, options) => {
     if (!/^\d+$/.test(id ?? '')) return { text: `Usage: /${e.command} <id>` }
     if (e.command === 'ticket-show') {
       await update($, selected, () => Number(id))
-      await $.ui.open({ id: DETAIL_PANE, title: `INC-${id}` })
-      return { text: `Showing #${id} in its own pane.` }
+      await $.ui.open({ id: PANE, title: 'Ops tickets' })
+      return { text: `Showing #${id} in the pane.` }
     }
     const r = await act($, cfg, 'Saving...', e.command === 'ticket-fix' ? ['fix', id!, ...rest] : ['reopen', id!])
     return { text: r.ok ? r.out : r.err }
@@ -547,7 +545,7 @@ export const register: Register = (on, options) => {
     // to the end (see ui.scroll). The wheel moves `pageIndex` (the first row shown) instead.
     const bodyRows = Math.max(16, (e.viewport?.rows ?? 48) - 1)
     const ROW_H = compact ? 6 : 4
-    const scrolledDown = isDesktop && page > 0
+    const scrolledDown = isDesktop && (page > 0 || all.some(t => t.id === sel))
     const TOP_H = scrolledDown ? 4 : Svg ? 30 : compact ? 22 : 18
     const windowed = isDesktop // only the desktop pane pinned itself to its end
     const fit = windowed ? Math.max(2, Math.floor((bodyRows - TOP_H - 7) / ROW_H) - fitAdjust) : Math.max(1, shown.length)
@@ -735,14 +733,14 @@ export const register: Register = (on, options) => {
             {(() => {
               const full = isDesktop ? `${evidence}\n\n${t.detail ?? ''}` : t.detail ?? ''
               const lines = full.split('\n')
-              const shownText = showAll || lines.length <= 14 ? full : `${lines.slice(0, 14).join('\n')}\n…`
+              const shownText = showAll || lines.length <= 8 ? full : `${lines.slice(0, 8).join('\n')}\n…`
               return (
                 <Box flexDirection="column">
                   {/* plain text, not Code: the desktop code viewer pulled the pane to its end */}
                   <Box paddingX={1} backgroundColor={col('#080d1a', '')}>
                     <Text wrap="wrap" color={col('#cbd5e1', 'text')}>{shownText}</Text>
                   </Box>
-                  {lines.length > 14 && (
+                  {lines.length > 8 && (
                     <Button key={`ev-more-${t.id}`} plain label={showAll ? '▴ Show less' : `▾ Show full evidence (${lines.length} lines)`}
                       onPress={() => void update($, expanded, v => !v)} />
                   )}
@@ -850,7 +848,7 @@ export const register: Register = (on, options) => {
 
             <Box flexDirection="column" gap={0}>
               <Text bold color={col(C.ghost, 'subtle')}>AUDIT TRAIL</Text>
-              {t.events.slice(-8).map((ev, i) => (
+              {t.events.slice(showAll ? -12 : -3).map((ev, i) => (
                 <Box key={`ev-${i}`} flexDirection="row" justifyContent="space-between">
                   <Text wrap="truncate-end">
                     <Text color={col(/fix|verified/.test(ev.kind) ? C.emerald : /reopen|spike|fail/.test(ev.kind) ? C.roseSoft : ev.kind === 'opened' ? C.amberSoft : C.cyan, 'suggestion')}>{'● '}</Text>
@@ -886,7 +884,7 @@ export const register: Register = (on, options) => {
           </Box>
         )}
         {shown.length === 0 && <Box paddingX={1} paddingY={1}><Text color={col(C.emerald, 'success')}>{isDoneView ? 'Nothing completed yet.' : 'No incidents match this view.'}</Text></Box>}
-        {pageRows.map(t => row(t))}
+        {pageRows.flatMap(t => [row(t), ...(!isDesktop && t.id === sel ? [inspector(t)] : [])])}
         <Box flexDirection="row" justifyContent="space-between" alignItems="center" paddingX={1} backgroundColor={col('#060a14', '')}>
           <Text color={col(C.muted, 'subtle')}><Text color={col(C.emerald, 'success')}>● </Text>{`Live: ${open.length} open incidents`}</Text>
           <Box flexDirection="row" gap={1} alignItems="center">
@@ -1065,7 +1063,12 @@ export const register: Register = (on, options) => {
           </Box>
         )}
 
-        {table}
+        {isDesktop && current ? (
+          <Box key="detail-view" flexDirection="column" gap={1}>
+            <Button key="back-list" plain label="‹ Back to the list" onPress={() => void closeInspect($, current.id)} />
+            {inspector(current)}
+          </Box>
+        ) : table}
       </Box>
     )
   })
