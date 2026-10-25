@@ -21,6 +21,8 @@ const pageIndex = atom({ plugin: 'ops-tickets', key: 'pageIndex' } as const, 0)
 const expanded = atom({ plugin: 'ops-tickets', key: 'expanded' } as const, false)
 const scheduleAt = atom({ plugin: 'ops-tickets', key: 'scheduleAt' } as const, null)
 const SETUP_PANE = 'ops-setup'
+// a ticket opens in a pane of its own: growing the list pane made the desktop pull it to its end
+const DETAIL_PANE = 'ops-ticket'
 
 const SEVERITY_COLOR = { high: 'error', medium: 'warning', low: 'subtle' } as const
 const STATUS_COLOR = { open: 'error', acknowledged: 'suggestion', fixed: 'success', resolved: 'subtle' } as const
@@ -260,10 +262,9 @@ async function findSlackChannel($: EngineInterface, cfg: Cfg, name: string) {
 // the row it came from (the state write redraws the pane before the scroll).
 async function inspect($: EngineInterface, id: number) {
   trace($, `inspect #${id}`)
-  const was = await read($, selected)
-  const next = was === id ? null : id
-  await update($, selected, () => next)
+  await update($, selected, () => id)
   await update($, expanded, () => false)
+  await $.ui.open({ id: DETAIL_PANE, title: `INC-${id}` })
 }
 
 // Switch the list to a preset view from anywhere (KPI cards, integration chips, view buttons).
@@ -276,6 +277,7 @@ async function showView($: EngineInterface, value: string) {
 async function closeInspect($: EngineInterface, id: number) {
   trace($, `close #${id}`)
   await update($, selected, () => null)
+  try { await $.ui.close({ id: DETAIL_PANE }) } catch { /* already closed */ }
 }
 
 async function askClaude($: EngineInterface, text: string) {
@@ -380,6 +382,10 @@ function trace($: EngineInterface, line: string) {
 let lastUp = { at: 0, offset: 0 }
 
 export const register: Register = (on, options) => {
+  on('ui.scroll', { requestId: DETAIL_PANE }, async ($, e, next) => {
+    trace($, `detail scroll origin=${e.origin.kind} by=${e.by} offset=${e.offset} body=${e.bodyRows} content=${e.contentRows}`)
+    return next(e)
+  })
   on('ui.scroll', { requestId: PANE }, async ($, e, next) => {
     const now = Date.now()
     const tag = `scroll origin=${e.origin.kind} by=${e.by} offset=${e.offset} body=${e.bodyRows} content=${e.contentRows} ptr=${e.pointer ? `${e.pointer.row}` : '-'}`
@@ -451,14 +457,17 @@ export const register: Register = (on, options) => {
     if (!/^\d+$/.test(id ?? '')) return { text: `Usage: /${e.command} <id>` }
     if (e.command === 'ticket-show') {
       await update($, selected, () => Number(id))
-      await $.ui.open({ id: PANE, title: 'Ops tickets' })
-      return { text: `Showing #${id} in the pane.` }
+      await $.ui.open({ id: DETAIL_PANE, title: `INC-${id}` })
+      return { text: `Showing #${id} in its own pane.` }
     }
     const r = await act($, cfg, 'Saving...', e.command === 'ticket-fix' ? ['fix', id!, ...rest] : ['reopen', id!])
     return { text: r.ok ? r.out : r.err }
   })
 
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+  // one drawing for both panes: the list (PANE) and the opened ticket (DETAIL_PANE)
+  on('ui.render', { component: 'Pane' }, async ($, e, next) => {
+    if (e.requestId !== PANE && e.requestId !== DETAIL_PANE) return next(e)
+    const isDetail = e.requestId === DETAIL_PANE
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
     const Input = e.surface !== 'mobile' && 'Input' in els ? els.Input : null
@@ -610,7 +619,7 @@ export const register: Register = (on, options) => {
             {Link && urlsOf(t)[0] && <Link key={`rowlink-${t.id}`} href={urlsOf(t)[0]!} label="↗ link" />}
           </Box>
           <Button key={`pick-${t.id}`} label={isSel ? 'Close' : 'Inspect »'} variant={isSel ? 'primary' : 'secondary'}
-            onPress={() => void inspect($, t.id)} />
+            onPress={() => void (isSel ? closeInspect($, t.id) : inspect($, t.id))} />
         </Box>
       )
     }
@@ -656,7 +665,7 @@ export const register: Register = (on, options) => {
               : <Text color="subtle">{`${'█'.repeat(Math.round(ppct * 8))}${'░'.repeat(8 - Math.round(ppct * 8))}`}</Text>}
           </Box>
           <Button key={`pick-${t.id}`} label={isSel ? 'Close' : 'Inspect »'} variant={isSel ? 'primary' : 'secondary'}
-            onPress={() => void inspect($, t.id)} />
+            onPress={() => void (isSel ? closeInspect($, t.id) : inspect($, t.id))} />
         </Box>
       )
     }
@@ -875,7 +884,7 @@ export const register: Register = (on, options) => {
           </Box>
         )}
         {shown.length === 0 && <Box paddingX={1} paddingY={1}><Text color={col(C.emerald, 'success')}>{isDoneView ? 'Nothing completed yet.' : 'No incidents match this view.'}</Text></Box>}
-        {pageRows.flatMap(t => [row(t), ...(!wide && t.id === sel ? [inspector(t)] : [])])}
+        {pageRows.map(t => row(t))}
         <Box flexDirection="row" justifyContent="space-between" alignItems="center" paddingX={1} backgroundColor={col('#060a14', '')}>
           <Text color={col(C.muted, 'subtle')}><Text color={col(C.emerald, 'success')}>● </Text>{`Live: ${open.length} open incidents`}</Text>
           <Box flexDirection="row" gap={1} alignItems="center">
@@ -886,6 +895,12 @@ export const register: Register = (on, options) => {
         </Box>
       </Box>
     )
+
+    if (isDetail) {
+      return current
+        ? <Box key="detail-pane" flexDirection="column" backgroundColor={col('#0b1326', '')}>{inspector(current)}</Box>
+        : <Box padding={1}><Text color={col(C.muted, 'subtle')}>No ticket selected. Press Inspect on a ticket in the Ops tickets pane.</Text></Box>
+    }
 
     return (
       <Box flexDirection="column" gap={1} padding={1} backgroundColor={col(C.canvas, '')}>
@@ -1037,12 +1052,7 @@ export const register: Register = (on, options) => {
           </Box>
         )}
 
-        {wide ? (
-          <Box flexDirection="row" gap={1} alignItems="flex-start">
-            <Box flexDirection="column" width={current ? '58%' : '100%'}>{table}</Box>
-            {current && <Box flexDirection="column" width="42%">{inspector(current)}</Box>}
-          </Box>
-        ) : table}
+        {table}
       </Box>
     )
   })

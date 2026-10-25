@@ -94,45 +94,45 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect(await ui.find({ text: /Ops tickets\.xlsx/ })).toBeDefined()
     expect(await ui.find({ key: 'open-export' })).toBeDefined()
 
-    // inspector + runbook
+    // inspector + runbook: the ticket opens in its own pane, the list pane does not grow
     await ui.press({ key: 'pick-4' })
-    expect(await ui.find({ text: /RUNBOOK PIPELINE/ })).toBeDefined()
-    expect(await ui.find({ text: /Step 1 of 2/ })).toBeDefined()
-    const order: string[] = []
-    const walk = (n: unknown) => {
-      if (!n || typeof n !== 'object') return
+    const keysOf = (n: unknown, acc: string[] = []) => {
+      if (!n || typeof n !== 'object') return acc
       const node = n as { key?: string; props?: { key?: string }; children?: unknown[] }
       const k = node.key ?? node.props?.key
-      if (k && /^(t-|detail-)/.test(k)) order.push(k)
-      for (const c of node.children ?? []) walk(c)
+      if (k) acc.push(k)
+      for (const c of node.children ?? []) keysOf(c, acc)
+      return acc
     }
-    walk(await ui.drawn())
-    if (surface === 'desktop') expect(order.indexOf('detail-4')).toBe(order.length - 1) // side inspector
-    else expect(order.indexOf('detail-4')).toBe(order.indexOf('t-4') + 1)              // under its row
+    expect(keysOf(await ui.drawn())).not.toContain('detail-4')
+    const dui = await $.ui.mount({ plugin: 'ops-tickets', surface, component: 'Pane', requestId: 'ops-ticket', props: {} as never })
+    expect(await dui.find({ text: /RUNBOOK PIPELINE/ })).toBeDefined()
+    expect(await dui.find({ text: /Step 1 of 2/ })).toBeDefined()
+    expect(keysOf(await dui.drawn())).toContain('detail-4')
 
     // every link in the ticket is clickable (main link + one inside the detail text)
-    const links = (await ui.findAll({ type: 'Link' })) as unknown as { props?: { href?: string } }[]
+    const links = (await dui.findAll({ type: 'Link' })) as unknown as { props?: { href?: string } }[]
     const hrefs = links.map(l => l.props?.href ?? '')
     expect(hrefs).toContain('https://errors.example.com/issues/4/')
     expect(hrefs).toContain('https://admin.example.com/orders/log/77/change/')
 
-    await ui.press({ key: 'copy-ticket-4' })
+    await dui.press({ key: 'copy-ticket-4' })
     expect(copied.at(-1)).toContain('SKU: 90001')
     await ui.press({ key: 'code-4' })
     expect(copied.at(-1)).toBe('90001')
 
-    await ui.press({ key: 'step-do-4-0' })
+    await dui.press({ key: 'step-do-4-0' })
     expect(calls.some(a => a.includes('step') && a.includes('4') && a.includes('0'))).toBe(true)
-    await ui.press({ key: 'verify-4' })
-    expect(await ui.find({ text: /Code fine now/ })).toBeDefined()
-    await ui.press({ key: 'ack-4' })
+    await dui.press({ key: 'verify-4' })
+    expect(await dui.find({ text: /Code fine now/ })).toBeDefined()
+    await dui.press({ key: 'ack-4' })
     expect(calls.some(a => a.includes('ack') && a.includes('4'))).toBe(true)
 
     // resolving needs a second, explicit confirmation
-    expect(await ui.find({ key: 'fix-4' })).toBeUndefined()
-    await ui.press({ key: 'ask-fix-4' })
-    expect((await ui.find({ text: /Confirm INC-4 is resolved/ })) ?? (await ui.find({ key: 'dc-4' }))).toBeDefined()
-    await ui.input({ key: 'fix-4', text: 'renamed on POS' })
+    expect(await dui.find({ key: 'fix-4' })).toBeUndefined()
+    await dui.press({ key: 'ask-fix-4' })
+    expect((await dui.find({ text: /Confirm INC-4 is resolved/ })) ?? (await dui.find({ key: 'dc-4' }))).toBeDefined()
+    await dui.input({ key: 'fix-4', text: 'renamed on POS' })
     expect(calls.some(a => a.includes('fix') && a.includes('4') && a.includes('renamed'))).toBe(true)
   })
 }
@@ -163,25 +163,18 @@ for (const [label, surface, viewport] of [
     expect(await ui.find({ text: /FREQUENCY · PIPELINE · ACTION/ })).toBeUndefined() // no wide column header
 
     await ui.press({ key: 'pick-4' })
-    const order: string[] = []
-    const walk = (n: unknown) => {
-      if (!n || typeof n !== 'object') return
-      const node = n as { key?: string; props?: { key?: string }; children?: unknown[] }
-      const k = node.key ?? node.props?.key
-      if (k && /^(t-|detail-)/.test(k)) order.push(k)
-      for (const c of node.children ?? []) walk(c)
-    }
-    walk(await ui.drawn())
-    expect(order.indexOf('detail-4')).toBe(order.indexOf('t-4') + 1) // under its own row
+    const dui = await $.ui.mount({ plugin: 'ops-tickets', surface, component: 'Pane', requestId: 'ops-ticket', props: {} as never,
+      ...(viewport ? { viewport } : {}) } as never)
+    expect(await dui.find({ key: 'detail-4' })).toBeDefined()
 
-    await ui.press({ key: 'ask-fix-4' })
+    await dui.press({ key: 'ask-fix-4' })
     if (surface === 'mobile') {
-      await ui.press({ key: 'fix-4' }) // no text input on phones: one tap confirms
+      await dui.press({ key: 'fix-4' }) // no text input on phones: one tap confirms
       expect(calls.some(a => a.includes('fix') && a.includes('4'))).toBe(true)
       await ui.press({ key: 'f-owner-Ops' }) // owner filter as buttons on phones
       expect(await ui.find({ text: /Exampleland · Harbour/ })).toBeUndefined()
     } else {
-      await (ui as unknown as { input: (a: { key: string; text: string }) => Promise<unknown> }).input({ key: 'fix-4', text: 'done' })
+      await (dui as unknown as { input: (a: { key: string; text: string }) => Promise<unknown> }).input({ key: 'fix-4', text: 'done' })
       expect(calls.some(a => a.includes('fix') && a.includes('done'))).toBe(true)
     }
   })
