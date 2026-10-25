@@ -9,6 +9,12 @@ const TICKETS = [
     owner: 'Catalogue', source: 'Shop checks', meta: { url: 'https://errors.example.com/issues/4/', kind: 'code', code: '90001', code_label: 'SKU', missing_in: 'Code conflict', store: 'Harbour', country: 'Exampleland', city: 'Port City' },
   },
   {
+    id: 30, check_name: 'catalogue', title: 'Exampleland / Quayside (Port City): SKU 90002 - Missing in shop',
+    severity: 'high', status: 'fixed', detail: null, action: null, occurrences: 2,
+    first_seen: '2026-10-14T09:00:00Z', last_seen: '2026-10-14T09:00:00Z', fixed_at: '2026-10-15T10:00:00Z', fixed_note: 'added',
+    reopen_count: 0, events: [], steps: [], steps_done: [], owner: 'Catalogue', source: 'Shop checks', meta: { kind: 'code', code: '90002', store: 'Quayside', country: 'Exampleland', city: 'Port City' },
+  },
+  {
     id: 12, check_name: 'silent', title: 'Otherland / Northgate (Hill Town): no sales for 12h+',
     severity: 'medium', status: 'open', detail: null, action: null, occurrences: 1,
     first_seen: '2026-10-15T11:56:17Z', last_seen: '2026-10-15T11:56:17Z', fixed_at: null, fixed_note: null,
@@ -43,6 +49,16 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect(await ui.find({ text: /Next automated run: 08:12/ })).toBeDefined()
     if (surface === 'desktop') expect((await ui.findAll({ type: 'Svg' })).length).toBeGreaterThanOrEqual(6) // 4 KPIs + pipelines
     else expect(await ui.find({ text: /1 P0/ })).toBeDefined()
+
+    // completed tickets stay out of the main views, under their own tab
+    expect(await ui.find({ text: /Exampleland · Quayside/ })).toBeUndefined()
+    await ui.press({ key: 'v-all' })
+    expect(await ui.find({ text: /Exampleland · Quayside/ })).toBeUndefined()
+    await ui.press({ key: 'v-done' })
+    expect(await ui.find({ text: /Exampleland · Quayside/ })).toBeDefined()
+    expect(await ui.find({ text: /Exampleland · Harbour/ })).toBeUndefined()
+    await ui.press({ key: 'back-active' })
+    expect(await ui.find({ text: /Exampleland · Harbour/ })).toBeDefined()
 
     // KPI cards and integration chips open their views
     if (surface === 'desktop') {

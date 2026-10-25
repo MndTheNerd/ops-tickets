@@ -516,26 +516,34 @@ export const register: Register = (on, options) => {
     const open = live.filter(t => t.status === 'open')
     const high = open.filter(t => t.severity === 'high')
     const sevRank = { high: 0, medium: 1, low: 2 } as const
+    // finished work (fixed and watched, or resolved) lives in the Completed tab only
+    const isDone = (t: Ticket) => t.status === 'fixed' || t.status === 'resolved'
+    const done = all.filter(isDone)
+    const active = all.filter(t => !isDone(t))
+    const isDoneView = view === 'done' || view === 'fixed'
     const matchView = (t: Ticket) =>
-      view === 'open' ? t.status === 'open'
-        : view === 'high' ? t.status === 'open' && t.severity === 'high'
-          : view === 'ack' ? t.status === 'acknowledged'
-            : view === 'fixed' ? t.status === 'fixed'
-              : view === 'code' ? t.status === 'open' && !!t.meta?.code
-                : view === 'regress' ? t.status !== 'resolved' && t.reopen_count > 0
-              : view.startsWith('src:') ? t.status !== 'resolved' && t.source === view.slice(4)
-                : view.startsWith('geo:') ? t.status !== 'resolved' && t.meta?.country === view.slice(4)
-                  : t.status !== 'resolved'
+      isDoneView ? (view === 'fixed' ? t.status === 'fixed' : isDone(t))
+        : isDone(t) ? false
+          : view === 'open' ? t.status === 'open'
+            : view === 'high' ? t.status === 'open' && t.severity === 'high'
+              : view === 'ack' ? t.status === 'acknowledged'
+                : view === 'code' ? t.status === 'open' && !!t.meta?.code
+                  : view === 'regress' ? t.reopen_count > 0
+                    : view.startsWith('src:') ? t.source === view.slice(4)
+                      : view.startsWith('geo:') ? t.meta?.country === view.slice(4)
+                        : true
     const q = search.trim().toLowerCase()
     const matchSearch = (t: Ticket) => !q || [t.title, t.detail ?? '', t.meta?.code ?? '', t.owner ?? '', place(t), String(t.id), t.source]
       .some(s => s.toLowerCase().includes(q))
-    const shown = live.filter(t => matchView(t) && matchSearch(t) && (!who || t.owner === who))
-      .sort((a, b) => sevRank[a.severity] - sevRank[b.severity] || b.last_seen.localeCompare(a.last_seen))
+    const shown = all.filter(t => matchView(t) && matchSearch(t) && (!who || t.owner === who))
+      .sort(isDoneView
+        ? (a, b) => (b.fixed_at ?? b.last_seen).localeCompare(a.fixed_at ?? a.last_seen) // newest finished first
+        : (a, b) => sevRank[a.severity] - sevRank[b.severity] || b.last_seen.localeCompare(a.last_seen))
     const PER_PAGE = 12
     const pages = Math.max(1, Math.ceil(shown.length / PER_PAGE))
     const pg = Math.min(page, pages - 1)
     const pageRows = shown.slice(pg * PER_PAGE, pg * PER_PAGE + PER_PAGE)
-    const current = live.find(t => t.id === sel) ?? null
+    const current = all.find(t => t.id === sel) ?? null
     const wide = isDesktop && !compact && (e.viewport?.columns ?? 160) >= 120
     const countBy = (key: (t: Ticket) => string | undefined, list: Ticket[]) =>
       [...list.reduce((m, t) => { const v = key(t); return v ? m.set(v, (m.get(v) ?? 0) + 1) : m }, new Map<string, number>())]
@@ -860,7 +868,13 @@ export const register: Register = (on, options) => {
           </Box>
           {!compact && <Text color={col(C.muted, 'subtle')}>FREQUENCY · PIPELINE · ACTION</Text>}
         </Box>
-        {shown.length === 0 && <Box paddingX={1} paddingY={1}><Text color={col(C.emerald, 'success')}>No incidents match this view.</Text></Box>}
+        {isDoneView && (
+          <Box paddingX={1} flexDirection="row" gap={1} flexWrap="wrap">
+            <Text color={col(C.emerald, 'success')}>✓ Completed: fixed tickets stay here while they are watched, then auto-resolve. A regression reopens one in the main list.</Text>
+            <Button key="back-active" plain label="‹ Back to active" onPress={() => void showView($, 'open')} />
+          </Box>
+        )}
+        {shown.length === 0 && <Box paddingX={1} paddingY={1}><Text color={col(C.emerald, 'success')}>{isDoneView ? 'Nothing completed yet.' : 'No incidents match this view.'}</Text></Box>}
         {pageRows.flatMap(t => [row(t), ...(!wide && t.id === sel ? [inspector(t)] : [])])}
         <Box flexDirection="row" justifyContent="space-between" alignItems="center" paddingX={1} backgroundColor={col('#060a14', '')}>
           <Text color={col(C.muted, 'subtle')}><Text color={col(C.emerald, 'success')}>● </Text>{`Live: ${open.length} open incidents`}</Text>
@@ -911,7 +925,7 @@ export const register: Register = (on, options) => {
         <Box flexDirection="row" justifyContent="space-between" flexWrap="wrap" gap={1} paddingX={1}>
           <Box flexDirection="row" gap={1} flexWrap="wrap" alignItems="center">
             <Text bold color={col(C.ghost, 'subtle')}>INTEGRATIONS:</Text>
-            {[...new Set(live.map(t => t.source))].sort().map(s => {
+            {[...new Set(active.map(t => t.source))].sort().map(s => {
               const hs = health(s)
               const n = open.filter(t => t.source === s).length
               return <Button key={`hs-${s}`} plain onPress={() => void showView($, `src:${s}`)}><Text backgroundColor={col(hs === 'emerald' ? '#0f1d2c' : TINT[hs]![0], 'promptBorder')}
@@ -940,7 +954,7 @@ export const register: Register = (on, options) => {
               value: mttr === null ? '–' : dur(mttr), caption: '', rightTop: `Fixed today: ${fixedToday}`,
               rightSub: `${verifiedToday} verified today`, rightSubColor: C.emerald,
               footL: `Acknowledged: ${live.filter(t => t.status === 'acknowledged').length}`, footR: `Owners: ${new Set(open.map(t => t.owner)).size}`, delay: 70 })} />
-              <Button key="k-mttr-view" plain label={`View ${fixed.length} fixed (watching) ›`} onPress={() => void showView($, 'fixed')} />
+              <Button key="k-mttr-view" plain label={`View ${done.length} completed ›`} onPress={() => void showView($, 'done')} />
             </Box>
             <Box key="k-codes-card" flexDirection="column" gap={0}>
               <Svg key="k-codes" isInteractive alt={`${codeOpen.length} ${codeLabel} issues`} source={kpi2Svg(codeOpen.length ? {
@@ -983,10 +997,14 @@ export const register: Register = (on, options) => {
             {sourcesOpen.map(([s, n]) => viewBtn(`src-${s}`, s, n, `src:${s}`))}
             {countries.slice(0, 4).map(([c, n]) => viewBtn(`geo-${c}`, `Regional: ${c}`, n, `geo:${c}`))}
             {viewBtn('ack', 'Acknowledged', live.filter(t => t.status === 'acknowledged').length, 'ack')}
-            {viewBtn('fixed', 'Fixed (watching)', fixed.length, 'fixed')}
-            {viewBtn('all', 'All', live.length, 'all')}
+            {viewBtn('all', 'All active', active.length, 'all')}
             {view === 'code' && viewBtn('code', `${codeLabel} issues`, codeOpen.length, 'code')}
             {view === 'regress' && viewBtn('regress', 'Regressions', regressions, 'regress')}
+          </Box>
+          {/* finished tickets are kept out of every view above */}
+          <Box flexDirection="row" gap={1} alignItems="center">
+            <Text color={col(C.hair, 'subtle')}>│</Text>
+            {viewBtn('done', '✓ Completed', done.length, 'done')}
           </Box>
           {!Select && (
             <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
