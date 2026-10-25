@@ -377,7 +377,6 @@ function trace($: EngineInterface, line: string) {
 // offset, 0.3.3-0.3.7 traces). So the list pane draws only what fits and owns the wheel.
 // what the list pane drew last: how many rows fit and how many there are
 let listWindow = { fit: 8, total: 0, windowed: false, detail: false }
-let wheelRest = 0
 // rows taken off the window when the drawn list still came out taller than the pane
 let fitAdjust = 0
 
@@ -390,20 +389,26 @@ export const register: Register = (on, options) => {
     // terminal and phones scroll as usual; so does an open ticket (one screen or a little more)
     if (!listWindow.windowed || listWindow.detail) return next(e)
     trace($, `scroll origin=${e.origin.kind} by=${e.by} offset=${e.offset} body=${e.bodyRows} content=${e.contentRows}`)
-    if (e.contentRows > e.bodyRows && listWindow.fit > 2 && fitAdjust < 6) {
-      // the estimate drew too much: take rows off and redraw, so the pane never has an end to pin
-      fitAdjust += Math.max(1, Math.ceil((e.contentRows - e.bodyRows) / 4))
-      trace($, `  overflow ${e.contentRows - e.bodyRows} rows: fitAdjust=${fitAdjust}`)
+    // calibrate the estimate from what was really drawn: trim when taller than the pane,
+    // add rows when a lot of the pane is left empty (0.3.10 drew 29 of 45 rows)
+    const spare = e.bodyRows - e.contentRows
+    const more = listWindow.fit < listWindow.total
+    if (spare < 0 && listWindow.fit > 2 && fitAdjust < 8) {
+      fitAdjust += Math.max(1, Math.ceil(-spare / 4))
+      trace($, `  overflow ${-spare} rows: fitAdjust=${fitAdjust}`)
+      $.ui.invalidate('ui.render')
+    } else if (spare >= 5 && more && fitAdjust > -12) {
+      fitAdjust -= Math.floor((spare - 1) / 4)
+      trace($, `  ${spare} rows free: fitAdjust=${fitAdjust}`)
       $.ui.invalidate('ui.render')
     }
     if (e.origin.kind !== 'person') return {}
-    // the pane's own window stays put; a wheel tick of ~3 rows moves the list by one ticket.
+    // the pane's own window stays put; each wheel event moves the list by one ticket (few
+    // reach the plugin while the pane has nothing of its own to scroll).
     // Jumps of a page or more are the surface pinning itself, not the wheel: ignored.
     if (Math.abs(e.by) > e.bodyRows / 2) { trace($, '  ignored jump'); return {} }
-    wheelRest += e.by
-    const steps = Math.trunc(wheelRest / 3)
+    const steps = Math.sign(e.by)
     if (!steps) return {}
-    wheelRest -= steps * 3
     const max = Math.max(0, listWindow.total - listWindow.fit)
     await update($, pageIndex, p => Math.max(0, Math.min(max, p + steps)))
     return {}
@@ -547,7 +552,7 @@ export const register: Register = (on, options) => {
     const bodyRows = Math.max(16, (e.viewport?.rows ?? 48) - 1)
     const ROW_H = compact ? 6 : 4
     const scrolledDown = isDesktop && (page > 0 || all.some(t => t.id === sel))
-    const TOP_H = scrolledDown ? 4 : Svg ? 30 : compact ? 22 : 18
+    const TOP_H = scrolledDown ? 4 : Svg ? 26 : compact ? 22 : 18
     const windowed = isDesktop // only the desktop pane pinned itself to its end
     const fit = windowed ? Math.max(2, Math.floor((bodyRows - TOP_H - 7) / ROW_H) - fitAdjust) : Math.max(1, shown.length)
     const start = Math.max(0, Math.min(page, shown.length - fit))
