@@ -376,7 +376,7 @@ function trace($: EngineInterface, line: string) {
 // The desktop pane pinned a pane taller than itself to its end (repeated moves onto the last
 // offset, 0.3.3-0.3.7 traces). So the list pane draws only what fits and owns the wheel.
 // what the list pane drew last: how many rows fit and how many there are
-let listWindow = { fit: 8, total: 0, windowed: false }
+let listWindow = { fit: 8, total: 0, windowed: false, detail: false }
 let wheelRest = 0
 // rows taken off the window when the drawn list still came out taller than the pane
 let fitAdjust = 0
@@ -387,9 +387,10 @@ export const register: Register = (on, options) => {
     return next(e)
   })
   on('ui.scroll', { requestId: PANE }, async ($, e, next) => {
-    if (!listWindow.windowed) return next(e) // terminal and phones scroll the pane as usual
+    // terminal and phones scroll as usual; so does an open ticket (one screen or a little more)
+    if (!listWindow.windowed || listWindow.detail) return next(e)
     trace($, `scroll origin=${e.origin.kind} by=${e.by} offset=${e.offset} body=${e.bodyRows} content=${e.contentRows}`)
-    if (e.contentRows > e.bodyRows && listWindow.fit > 2) {
+    if (e.contentRows > e.bodyRows && listWindow.fit > 2 && fitAdjust < 6) {
       // the estimate drew too much: take rows off and redraw, so the pane never has an end to pin
       fitAdjust += Math.max(1, Math.ceil((e.contentRows - e.bodyRows) / 4))
       trace($, `  overflow ${e.contentRows - e.bodyRows} rows: fitAdjust=${fitAdjust}`)
@@ -551,7 +552,7 @@ export const register: Register = (on, options) => {
     const fit = windowed ? Math.max(2, Math.floor((bodyRows - TOP_H - 7) / ROW_H) - fitAdjust) : Math.max(1, shown.length)
     const start = Math.max(0, Math.min(page, shown.length - fit))
     const pageRows = shown.slice(start, start + fit)
-    if (!isDetail) listWindow = { fit, total: shown.length, windowed }
+    if (!isDetail) listWindow = { fit, total: shown.length, windowed, detail: isDesktop && sel !== null && all.some(t => t.id === sel) }
     const current = all.find(t => t.id === sel) ?? null
     const wide = isDesktop && !compact && (e.viewport?.columns ?? 160) >= 120
     const countBy = (key: (t: Ticket) => string | undefined, list: Ticket[]) =>
@@ -733,14 +734,14 @@ export const register: Register = (on, options) => {
             {(() => {
               const full = isDesktop ? `${evidence}\n\n${t.detail ?? ''}` : t.detail ?? ''
               const lines = full.split('\n')
-              const shownText = showAll || lines.length <= 8 ? full : `${lines.slice(0, 8).join('\n')}\n…`
+              const shownText = showAll || lines.length <= 6 ? full : `${lines.slice(0, 6).join('\n')}\n…`
               return (
                 <Box flexDirection="column">
                   {/* plain text, not Code: the desktop code viewer pulled the pane to its end */}
                   <Box paddingX={1} backgroundColor={col('#080d1a', '')}>
                     <Text wrap="wrap" color={col('#cbd5e1', 'text')}>{shownText}</Text>
                   </Box>
-                  {lines.length > 8 && (
+                  {lines.length > 6 && (
                     <Button key={`ev-more-${t.id}`} plain label={showAll ? '▴ Show less' : `▾ Show full evidence (${lines.length} lines)`}
                       onPress={() => void update($, expanded, v => !v)} />
                   )}
@@ -848,7 +849,7 @@ export const register: Register = (on, options) => {
 
             <Box flexDirection="column" gap={0}>
               <Text bold color={col(C.ghost, 'subtle')}>AUDIT TRAIL</Text>
-              {t.events.slice(showAll ? -12 : -3).map((ev, i) => (
+              {t.events.slice(showAll ? -12 : -2).map((ev, i) => (
                 <Box key={`ev-${i}`} flexDirection="row" justifyContent="space-between">
                   <Text wrap="truncate-end">
                     <Text color={col(/fix|verified/.test(ev.kind) ? C.emerald : /reopen|spike|fail/.test(ev.kind) ? C.roseSoft : ev.kind === 'opened' ? C.amberSoft : C.cyan, 'suggestion')}>{'● '}</Text>
@@ -909,7 +910,9 @@ export const register: Register = (on, options) => {
             backgroundColor={col('#080d1a', '')} borderStyle="single" borderColor={col(C.hair, 'promptBorder')}>
             <Text bold color={col(C.strong, 'text')}>OPS TICKETS</Text>
             <Text color={col(C.muted, 'subtle')}>{`${open.length} open · ${high.length} P0 · view: ${view}`}</Text>
-            <Button key="back-top" plain label="▲ Back to top" onPress={() => void update($, pageIndex, () => 0)} />
+            {sel !== null && all.some(t => t.id === sel)
+              ? <Button key="back-list" plain label="‹ Back to the list" onPress={() => void closeInspect($, sel)} />
+              : <Button key="back-top" plain label="▲ Back to top" onPress={() => void update($, pageIndex, () => 0)} />}
           </Box>
         ) : (
           <Box key="top" flexDirection="column" gap={1}>
@@ -1064,10 +1067,7 @@ export const register: Register = (on, options) => {
         )}
 
         {isDesktop && current ? (
-          <Box key="detail-view" flexDirection="column" gap={1}>
-            <Button key="back-list" plain label="‹ Back to the list" onPress={() => void closeInspect($, current.id)} />
-            {inspector(current)}
-          </Box>
+          <Box key="detail-view" flexDirection="column">{inspector(current)}</Box>
         ) : table}
       </Box>
     )
