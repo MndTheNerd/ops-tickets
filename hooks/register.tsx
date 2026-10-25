@@ -375,11 +375,13 @@ function trace($: EngineInterface, line: string) {
   }).catch(() => { traceDue = 0 })
 }
 
-// The desktop pane pulls its window back toward the end after the person scrolls up near it
-// (seen as +1..+3 moves landing between their -1 wheel ticks, and one jump to the end after a
-// ticket opens). Hold the window where the person last put it: a downward move right after an
-// upward one, or a single jump longer than a page, keeps the person's offset.
-let lastUp = { at: 0, offset: 0 }
+// The desktop pane pinned a pane taller than itself to its end (repeated moves onto the last
+// offset, 0.3.3-0.3.7 traces). So the list pane draws only what fits and owns the wheel.
+// what the list pane drew last: how many rows fit and how many there are
+let listWindow = { fit: 8, total: 0, windowed: false }
+let wheelRest = 0
+// rows taken off the window when the drawn list still came out taller than the pane
+let fitAdjust = 0
 
 export const register: Register = (on, options) => {
   on('ui.scroll', { requestId: DETAIL_PANE }, async ($, e, next) => {
@@ -387,32 +389,25 @@ export const register: Register = (on, options) => {
     return next(e)
   })
   on('ui.scroll', { requestId: PANE }, async ($, e, next) => {
-    const now = Date.now()
-    const tag = `scroll origin=${e.origin.kind} by=${e.by} offset=${e.offset} body=${e.bodyRows} content=${e.contentRows} ptr=${e.pointer ? `${e.pointer.row}` : '-'}`
-    if (e.origin.kind !== 'person') { trace($, tag); return next(e) }
-    if (e.by < 0) {
-      lastUp = { at: now, offset: e.offset }
-      trace($, tag)
-      return next(e)
+    if (!listWindow.windowed) return next(e) // terminal and phones scroll the pane as usual
+    trace($, `scroll origin=${e.origin.kind} by=${e.by} offset=${e.offset} body=${e.bodyRows} content=${e.contentRows}`)
+    if (e.contentRows > e.bodyRows && listWindow.fit > 2) {
+      // the estimate drew too much: take rows off and redraw, so the pane never has an end to pin
+      fitAdjust += Math.max(1, Math.ceil((e.contentRows - e.bodyRows) / 4))
+      trace($, `  overflow ${e.contentRows - e.bodyRows} rows: fitAdjust=${fitAdjust}`)
+      $.ui.invalidate('ui.render')
     }
-    // a jump that lands on the end soon after the person scrolled up is the pane pulling itself
-    // down, not the wheel (wheel ticks move 1-3 rows)
-    const atEnd = e.offset >= e.contentRows - e.bodyRows - 2
-    if (e.by > 3 && atEnd && now - lastUp.at < 3000) {
-      trace($, `${tag} HELD at ${lastUp.offset} (end pull)`)
-      return next({ ...e, offset: lastUp.offset })
-    }
-    if (e.by > 0 && now - lastUp.at < 400) {
-      trace($, `${tag} HELD at ${lastUp.offset}`)
-      return next({ ...e, offset: lastUp.offset })
-    }
-    if (e.by > e.bodyRows && !e.pointer) {
-      const offset = e.offset - e.by + e.bodyRows
-      trace($, `${tag} CAPPED to ${offset}`)
-      return next({ ...e, offset })
-    }
-    trace($, tag)
-    return next(e)
+    if (e.origin.kind !== 'person') return {}
+    // the pane's own window stays put; a wheel tick of ~3 rows moves the list by one ticket.
+    // Jumps of a page or more are the surface pinning itself, not the wheel: ignored.
+    if (Math.abs(e.by) > e.bodyRows / 2) { trace($, '  ignored jump'); return {} }
+    wheelRest += e.by
+    const steps = Math.trunc(wheelRest / 3)
+    if (!steps) return {}
+    wheelRest -= steps * 3
+    const max = Math.max(0, listWindow.total - listWindow.fit)
+    await update($, pageIndex, p => Math.max(0, Math.min(max, p + steps)))
+    return {}
   })
 
   const cfg: Cfg = { python: String(options.python ?? 'python') }
@@ -548,10 +543,17 @@ export const register: Register = (on, options) => {
       .sort(isDoneView
         ? (a, b) => (b.fixed_at ?? b.last_seen).localeCompare(a.fixed_at ?? a.last_seen) // newest finished first
         : (a, b) => sevRank[a.severity] - sevRank[b.severity] || b.last_seen.localeCompare(a.last_seen))
-    const PER_PAGE = 12
-    const pages = Math.max(1, Math.ceil(shown.length / PER_PAGE))
-    const pg = Math.min(page, pages - 1)
-    const pageRows = shown.slice(pg * PER_PAGE, pg * PER_PAGE + PER_PAGE)
+    // The list pane never draws taller than the pane: a taller tree let the desktop pin its window
+    // to the end (see ui.scroll). The wheel moves `pageIndex` (the first row shown) instead.
+    const bodyRows = Math.max(16, (e.viewport?.rows ?? 48) - 1)
+    const ROW_H = compact ? 6 : 4
+    const scrolledDown = isDesktop && page > 0
+    const TOP_H = scrolledDown ? 4 : Svg ? 30 : compact ? 22 : 18
+    const windowed = isDesktop // only the desktop pane pinned itself to its end
+    const fit = windowed ? Math.max(2, Math.floor((bodyRows - TOP_H - 7) / ROW_H) - fitAdjust) : Math.max(1, shown.length)
+    const start = Math.max(0, Math.min(page, shown.length - fit))
+    const pageRows = shown.slice(start, start + fit)
+    if (!isDetail) listWindow = { fit, total: shown.length, windowed }
     const current = all.find(t => t.id === sel) ?? null
     const wide = isDesktop && !compact && (e.viewport?.columns ?? 160) >= 120
     const countBy = (key: (t: Ticket) => string | undefined, list: Ticket[]) =>
@@ -873,7 +875,7 @@ export const register: Register = (on, options) => {
         <Box flexDirection="row" justifyContent="space-between" paddingX={1} backgroundColor={col('#111a2e', '')}>
           <Box flexDirection="row" gap={1}>
             <Text bold color={col('#cbd5e1', 'text')}>INCIDENT &amp; ENTITY RECORD</Text>
-            {chip('showing', `Showing ${pageRows.length} of ${shown.length}`, 'ghost')}
+            {chip('showing', shown.length ? `Rows ${start + 1}–${start + pageRows.length} of ${shown.length}` : 'Showing 0', 'ghost')}
           </Box>
           {!compact && <Text color={col(C.muted, 'subtle')}>FREQUENCY · PIPELINE · ACTION</Text>}
         </Box>
@@ -888,9 +890,9 @@ export const register: Register = (on, options) => {
         <Box flexDirection="row" justifyContent="space-between" alignItems="center" paddingX={1} backgroundColor={col('#060a14', '')}>
           <Text color={col(C.muted, 'subtle')}><Text color={col(C.emerald, 'success')}>● </Text>{`Live: ${open.length} open incidents`}</Text>
           <Box flexDirection="row" gap={1} alignItems="center">
-            <Text color={col(C.muted, 'subtle')}>{`Page ${pg + 1} of ${pages} (${live.length} total recorded)`}</Text>
-            <Button key="pg-prev" plain label="‹" onPress={() => void update($, pageIndex, p => Math.max(0, p - 1))} />
-            <Button key="pg-next" plain label="›" onPress={() => void update($, pageIndex, p => Math.min(pages - 1, p + 1))} />
+            <Text color={col(C.muted, 'subtle')}>{`${shown.length - start - pageRows.length} more below · scroll or use ▲ ▼`}</Text>
+            <Button key="pg-prev" plain label="▲" onPress={() => void update($, pageIndex, () => Math.max(0, start - fit))} />
+            <Button key="pg-next" plain label="▼" onPress={() => void update($, pageIndex, () => Math.max(0, Math.min(shown.length - fit, start + fit)))} />
           </Box>
         </Box>
       </Box>
@@ -904,6 +906,15 @@ export const register: Register = (on, options) => {
 
     return (
       <Box flexDirection="column" gap={1} padding={1} backgroundColor={col(C.canvas, '')}>
+        {scrolledDown ? (
+          <Box key="top-folded" flexDirection="row" gap={1} alignItems="center" paddingX={1}
+            backgroundColor={col('#080d1a', '')} borderStyle="single" borderColor={col(C.hair, 'promptBorder')}>
+            <Text bold color={col(C.strong, 'text')}>OPS TICKETS</Text>
+            <Text color={col(C.muted, 'subtle')}>{`${open.length} open · ${high.length} P0 · view: ${view}`}</Text>
+            <Button key="back-top" plain label="▲ Back to top" onPress={() => void update($, pageIndex, () => 0)} />
+          </Box>
+        ) : (
+          <Box key="top" flexDirection="column" gap={1}>
         {/* command header */}
         <Box flexDirection={compact ? 'column' : 'row'} justifyContent="space-between" alignItems={compact ? 'flex-start' : 'center'} flexWrap="wrap" gap={1}
           paddingX={1} backgroundColor={col('#080d1a', '')} borderStyle="single" borderColor={col(C.hair, 'promptBorder')}>
@@ -1041,6 +1052,8 @@ export const register: Register = (on, options) => {
           )}
         </Box>
 
+          </Box>
+        )}
         {note && <Text color={col(/fail|could not/i.test(note) ? C.roseSoft : C.emerald, /fail|could not/i.test(note) ? 'error' : 'success')} wrap="wrap">{note}</Text>}
         {exportPath && (
           <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
