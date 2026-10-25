@@ -1,6 +1,6 @@
 {
   "name": "ops-tickets",
-  "version": "0.3.12",
+  "version": "0.3.13",
   "description": "Turn your production health checks and alerts (database, Slack, Sentry, AWS, GitHub, URLs) into a ticket pane with owners, fixes, verification and regressions.",
   "author": { "name": "MndTheNerd" },
   "license": "MIT",

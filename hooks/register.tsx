@@ -264,6 +264,16 @@ async function inspect($: EngineInterface, id: number) {
   trace($, `inspect #${id}`)
   await update($, selected, () => id)
   await update($, expanded, () => false)
+  await seatFocus($, 'back-list') // the ticket view starts with its back button
+}
+
+// After a press redraws the pane, put the ring on a button near the top of what is now drawn,
+// so the pane does not keep a far-away element in view.
+async function seatFocus($: EngineInterface, key: string) {
+  try {
+    const r = await $.ui.focus({ requestId: PANE, key })
+    trace($, `seat focus ${key}: ${JSON.stringify(r)}`)
+  } catch (err) { trace($, `seat focus ${key} failed: ${String(err)}`) }
 }
 
 // Switch the list to a preset view from anywhere (KPI cards, integration chips, view buttons).
@@ -276,6 +286,7 @@ async function showView($: EngineInterface, value: string) {
 async function closeInspect($: EngineInterface, id: number) {
   trace($, `close #${id}`)
   await update($, selected, () => null)
+  await seatFocus($, `pick-${id}`)
 }
 
 async function askClaude($: EngineInterface, text: string) {
@@ -373,12 +384,6 @@ function trace($: EngineInterface, line: string) {
   }).catch(() => { traceDue = 0 })
 }
 
-// The desktop pane pinned a pane taller than itself to its end (repeated moves onto the last
-// offset, 0.3.3-0.3.7 traces). So the list pane draws only what fits and owns the wheel.
-// what the list pane drew last: how many rows fit and how many there are
-let listWindow = { fit: 8, total: 0, windowed: false, detail: false }
-// rows taken off the window when the drawn list still came out taller than the pane
-let fitAdjust = 0
 
 export const register: Register = (on, options) => {
   on('ui.scroll', { requestId: DETAIL_PANE }, async ($, e, next) => {
@@ -386,32 +391,14 @@ export const register: Register = (on, options) => {
     return next(e)
   })
   on('ui.scroll', { requestId: PANE }, async ($, e, next) => {
-    // terminal and phones scroll as usual; so does an open ticket (one screen or a little more)
-    if (!listWindow.windowed || listWindow.detail) return next(e)
     trace($, `scroll origin=${e.origin.kind} by=${e.by} offset=${e.offset} body=${e.bodyRows} content=${e.contentRows}`)
-    // calibrate the estimate from what was really drawn: trim when taller than the pane,
-    // add rows when a lot of the pane is left empty (0.3.10 drew 29 of 45 rows)
-    const excess = e.contentRows - e.bodyRows // the 6-row spacer should be most of it
-    const more = listWindow.fit < listWindow.total
-    if (excess > 12 && listWindow.fit > 2 && fitAdjust < 12) {
-      fitAdjust += Math.max(1, Math.ceil((excess - 8) / 4))
-      trace($, `  excess ${excess} rows: fitAdjust=${fitAdjust}`)
-      $.ui.invalidate('ui.render')
-    } else if (excess < 4 && more && fitAdjust > -12) {
-      fitAdjust -= Math.max(1, Math.floor((8 - excess) / 4))
-      trace($, `  excess ${excess} rows: fitAdjust=${fitAdjust}`)
-      $.ui.invalidate('ui.render')
-    }
-    if (e.origin.kind !== 'person') return {}
-    // the pane's own window stays put; each wheel event moves the list by one ticket (few
-    // reach the plugin while the pane has nothing of its own to scroll).
-    // Jumps of a page or more are the surface pinning itself, not the wheel: ignored.
-    if (Math.abs(e.by) > e.bodyRows / 2) { trace($, '  ignored jump'); return {} }
-    const steps = Math.sign(e.by)
-    if (!steps) return {}
-    const max = Math.max(0, listWindow.total - listWindow.fit)
-    await update($, pageIndex, p => Math.max(0, Math.min(max, p + steps)))
-    return {}
+    return next(e)
+  })
+  // where the focus ring goes: a pane keeps its focused element in view, so a ring left on the
+  // last button would hold the window at the end
+  on('ui.focus', { requestId: PANE }, async ($, e, next) => {
+    trace($, `focus ${e.origin.kind} -> ${e.element ?? '(engine stop)'}`)
+    return next(e)
   })
 
   const cfg: Cfg = { python: String(options.python ?? 'python') }
@@ -483,7 +470,6 @@ export const register: Register = (on, options) => {
     const view = await read($, statusFilter)          // the preset view: open | high | ack | fixed | all | src:<x> | geo:<x>
     const search = (await read($, sourceFilter)) ?? '' // free-text filter
     const who = await read($, ownerFilter)
-    const page = await read($, pageIndex)
     const ownerList = await read($, owners)
     const sel = await read($, selected)
     const working = await read($, busy)
@@ -547,19 +533,10 @@ export const register: Register = (on, options) => {
       .sort(isDoneView
         ? (a, b) => (b.fixed_at ?? b.last_seen).localeCompare(a.fixed_at ?? a.last_seen) // newest finished first
         : (a, b) => sevRank[a.severity] - sevRank[b.severity] || b.last_seen.localeCompare(a.last_seen))
-    // The list pane never draws taller than the pane: a taller tree let the desktop pin its window
-    // to the end (see ui.scroll). The wheel moves `pageIndex` (the first row shown) instead.
-    const bodyRows = Math.max(16, (e.viewport?.rows ?? 48) - 1)
-    const ROW_H = compact ? 6 : 4
-    const scrolledDown = isDesktop && (page > 0 || all.some(t => t.id === sel))
+    const scrolledDown = isDesktop && all.some(t => t.id === sel) // an open ticket folds the header
     // four KPI cards side by side: stacked, they made the header ~90 rows on a 106-column pane
-    const cardW = Math.max(140, Math.min(300, Math.floor(((e.viewport?.columns ?? 120) * 8 - 48) / 4)))
-    const TOP_H = scrolledDown ? 4 : Svg ? 22 : compact ? 22 : 18
-    const windowed = isDesktop // only the desktop pane pinned itself to its end
-    const fit = windowed ? Math.max(2, Math.floor((bodyRows - TOP_H - 7) / ROW_H) - fitAdjust) : Math.max(1, shown.length)
-    const start = Math.max(0, Math.min(page, shown.length - fit))
-    const pageRows = shown.slice(start, start + fit)
-    if (!isDetail) listWindow = { fit, total: shown.length, windowed, detail: isDesktop && sel !== null && all.some(t => t.id === sel) }
+    const cardW = Math.max(160, Math.min(380, Math.floor(((e.viewport?.columns ?? 120) * 14 - 64) / 4)))
+    const pageRows = shown // the whole view scrolls natively (windowing it in 0.3.8-0.3.12 cost the wheel)
     const current = all.find(t => t.id === sel) ?? null
     const wide = isDesktop && !compact && (e.viewport?.columns ?? 160) >= 120
     const countBy = (key: (t: Ticket) => string | undefined, list: Ticket[]) =>
@@ -881,7 +858,7 @@ export const register: Register = (on, options) => {
         <Box flexDirection="row" justifyContent="space-between" paddingX={1} backgroundColor={col('#111a2e', '')}>
           <Box flexDirection="row" gap={1}>
             <Text bold color={col('#cbd5e1', 'text')}>INCIDENT &amp; ENTITY RECORD</Text>
-            {chip('showing', shown.length ? `Rows ${start + 1}–${start + pageRows.length} of ${shown.length}` : 'Showing 0', 'ghost')}
+            {chip('showing', `Showing ${shown.length}`, 'ghost')}
           </Box>
           {!compact && <Text color={col(C.muted, 'subtle')}>FREQUENCY · PIPELINE · ACTION</Text>}
         </Box>
@@ -896,9 +873,7 @@ export const register: Register = (on, options) => {
         <Box flexDirection="row" justifyContent="space-between" alignItems="center" paddingX={1} backgroundColor={col('#060a14', '')}>
           <Text color={col(C.muted, 'subtle')}><Text color={col(C.emerald, 'success')}>● </Text>{`Live: ${open.length} open incidents`}</Text>
           <Box flexDirection="row" gap={1} alignItems="center">
-            <Text color={col(C.muted, 'subtle')}>{`${shown.length - start - pageRows.length} more below · scroll or use ▲ ▼`}</Text>
-            <Button key="pg-prev" plain label="▲" onPress={() => void update($, pageIndex, () => Math.max(0, start - fit))} />
-            <Button key="pg-next" plain label="▼" onPress={() => void update($, pageIndex, () => Math.max(0, Math.min(shown.length - fit, start + fit)))} />
+            <Text color={col(C.muted, 'subtle')}>{`${shown.length} in this view · ${live.length} recorded`}</Text>
           </Box>
         </Box>
       </Box>
@@ -1076,13 +1051,6 @@ export const register: Register = (on, options) => {
         {isDesktop && current ? (
           <Box key="detail-view" flexDirection="column">{inspector(current)}</Box>
         ) : table}
-        {windowed && !current && (
-          // a few blank rows below the fold: wheel events only reach the plugin while the pane
-          // has something to scroll, and the hook keeps the pane itself at the top
-          <Box key="wheel-spacer" flexDirection="column">
-            {[0, 1, 2, 3, 4, 5].map(i => <Text key={`sp-${i}`}> </Text>)}
-          </Box>
-        )}
       </Box>
     )
   })
